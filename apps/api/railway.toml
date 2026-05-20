@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+buildCommand = "pnpm install && pnpm --filter @devisvocal/types build && pnpm --filter @devisvocal/pdf build && pnpm --filter @devisvocal/api build"
+
+[deploy]
+startCommand = "node apps/api/dist/index.js"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

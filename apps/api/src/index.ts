@@ -1,0 +1,48 @@
+import 'dotenv/config';
+import express from 'express';
+import webhookWhatsApp from './routes/webhook-whatsapp.js';
+import webhookStripe from './routes/webhook-stripe.js';
+import devisRouter from './routes/devis.js';
+
+const app = express();
+const PORT = process.env.PORT ?? 3001;
+
+// ─── Stripe webhook — raw body obligatoire AVANT express.json() ───────────────
+app.use('/webhook/stripe', express.raw({ type: 'application/json' }), webhookStripe);
+
+// ─── Middlewares globaux ──────────────────────────────────────────────────────
+app.use(express.json());
+
+// ─── CORS simple (pour Next.js sur Vercel) ────────────────────────────────────
+app.use((req, res, next) => {
+  const origin = req.headers.origin ?? '';
+  const allowed = [
+    process.env.APP_URL ?? '',
+    'http://localhost:3000',
+  ].filter(Boolean);
+
+  if (allowed.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+app.use('/webhook/whatsapp', webhookWhatsApp);
+app.use('/api/devis', devisRouter);
+
+app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`✅ DevisVocal API running on port ${PORT}`);
+});
+
+export default app;

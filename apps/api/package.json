@@ -1,0 +1,35 @@
+{
+  "name": "@devisvocal/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@devisvocal/pdf": "workspace:*",
+    "@devisvocal/types": "workspace:*",
+    "@supabase/supabase-js": "^2.43.0",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "openai": "^4.52.0",
+    "resend": "^3.2.0",
+    "stripe": "^16.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.15.7",
+    "typescript": "^5.4.5"
+  }
+}
