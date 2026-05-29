@@ -63,15 +63,25 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     await updateDevisStatut(devis.id, devis.statut, { client_email });
   }
 
-  const { url } = await createCheckoutSession({
-    devisToken: token,
-    devisNumero: devis.numero,
-    artisanEmail: artisan?.email,
-    stripeCustomerId: artisan?.stripe_customer_id,
-    appUrl: APP_URL,
-  });
+  // Si pas de clé Stripe → mode dev, on simule un lien direct
+  if (!process.env.STRIPE_SECRET_KEY) {
+    res.json({ url: `${APP_URL}/devis/${token}/success?session_id=dev` });
+    return;
+  }
 
-  res.json({ url });
+  try {
+    const { url } = await createCheckoutSession({
+      devisToken: token,
+      devisNumero: devis.numero,
+      artisanEmail: artisan?.email,
+      stripeCustomerId: artisan?.stripe_customer_id,
+      appUrl: APP_URL,
+    });
+    res.json({ url });
+  } catch (err) {
+    console.error('[pay] Stripe error:', err);
+    res.status(500).json({ error: 'Erreur paiement. Réessayez.' });
+  }
 });
 
 export default router;

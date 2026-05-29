@@ -209,14 +209,18 @@ async function handleOnboarding(
       return;
     }
 
-    // Créer client Stripe
+    // Créer client Stripe (optionnel — on le fait au moment du paiement si clé absente)
     let stripeCustomerId = artisan.stripe_customer_id;
-    if (!stripeCustomerId) {
-      stripeCustomerId = await createOrGetStripeCustomer(
-        email,
-        artisan.nom_entreprise ?? 'Artisan',
-        from
-      );
+    if (!stripeCustomerId && process.env.STRIPE_SECRET_KEY) {
+      try {
+        stripeCustomerId = await createOrGetStripeCustomer(
+          email,
+          artisan.nom_entreprise ?? 'Artisan',
+          from
+        );
+      } catch (e) {
+        console.warn('[onboarding] Stripe customer creation skipped:', e);
+      }
     }
 
     await updateArtisan(artisan.id, { email, stripe_customer_id: stripeCustomerId });
@@ -399,22 +403,33 @@ async function createDevisAndSendLink(
     m.updateDevisStatut(devis.id, 'en_attente_paiement', { token: finalToken })
   );
 
-  // Créer la session Stripe
-  const { url: stripeUrl } = await createCheckoutSession({
-    devisToken: finalToken,
-    devisNumero: devis.numero,
-    artisanEmail: artisan.email,
-    stripeCustomerId: artisan.stripe_customer_id,
-    appUrl: APP_URL,
-  });
+  // Créer la session Stripe (optionnel si clé absente — mode test sans paiement)
+  let linkUrl: string;
+  if (process.env.STRIPE_SECRET_KEY) {
+    try {
+      const { url: stripeUrl } = await createCheckoutSession({
+        devisToken: finalToken,
+        devisNumero: devis.numero,
+        artisanEmail: artisan.email,
+        stripeCustomerId: artisan.stripe_customer_id,
+        appUrl: APP_URL,
+      });
+      ctx.stripe_url = stripeUrl;
+      linkUrl = stripeUrl;
+    } catch (e) {
+      console.warn('[createDevis] Stripe skipped:', e);
+      linkUrl = `${APP_URL}/devis/${finalToken}`;
+    }
+  } else {
+    // Mode dev — lien direct sans paiement
+    linkUrl = `${APP_URL}/devis/${finalToken}`;
+  }
 
   ctx.devis_id = devis.id;
   ctx.devis_token = finalToken;
-  ctx.stripe_url = stripeUrl;
   await updateSession(sessionId, 'AWAITING_PAYMENT', ctx);
 
-  const appUrl = `${APP_URL}/devis/${finalToken}`;
-  await sendText(from, MSG.lien_devis(appUrl));
+  await sendText(from, MSG.lien_devis(linkUrl));
 }
 
 // ─── Post-paiement : génération PDF + livraison ────────────────────────────────

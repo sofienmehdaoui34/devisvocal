@@ -51,7 +51,8 @@ app.get('/setup-webhook', async (_req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`✅ DevisVocal API running on port ${PORT}`);
-  console.log(`   Telegram webhook : ${process.env.APP_URL ?? 'http://localhost:' + PORT}/webhook/telegram`);
+  console.log(`   Telegram webhook : ${process.env.TUNNEL_URL ?? 'http://localhost:' + PORT}/webhook/telegram`);
+  console.log(`   Web app          : ${process.env.APP_URL ?? 'http://localhost:3000'}`);
 });
 
 export default app;

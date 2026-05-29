@@ -1,7 +1,12 @@
 import { Resend } from 'resend';
 import type { Devis, Artisan } from '@devisvocal/types';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Lazy init — évite le crash au démarrage si la clé n'est pas encore configurée
+let _resend: Resend | null = null;
+const getResend = () => {
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY ?? 'placeholder');
+  return _resend;
+};
 
 const FROM = `${process.env.EMAIL_FROM_NAME ?? 'DevisVocal'} <${process.env.EMAIL_FROM ?? 'devis@devisvocal.ch'}>`;
 
@@ -21,7 +26,7 @@ export async function sendDevisEmail(params: {
     ? artisanEmailHtml(devis, artisan)
     : clientEmailHtml(devis, artisan);
 
-  await resend.emails.send({
+  await getResend().emails.send({
     from: FROM,
     to: recipientEmail,
     subject,
