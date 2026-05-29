@@ -4,7 +4,15 @@ import path from 'node:path';
 import os from 'node:os';
 import { getMediaUrl, downloadMedia } from './telegram.js';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _openai: OpenAI | null = null;
+function getOpenAI() {
+  if (!_openai) {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) throw new Error('OPENAI_API_KEY manquant — transcription vocale désactivée');
+    _openai = new OpenAI({ apiKey: key });
+  }
+  return _openai;
+}
 
 /**
  * Transcrit un audio Telegram (file_id) via Whisper.
@@ -14,6 +22,7 @@ export async function transcribeAudioFromUrl(
   fileId: string,
   _mimeType = 'audio/ogg'
 ): Promise<string> {
+  const openai = getOpenAI();
   // Résoudre le file_id en URL de téléchargement
   const mediaUrl = await getMediaUrl(fileId);
 
