@@ -512,8 +512,3 @@ export async function handlePaymentSuccess(
   await sendText(artisan.whatsapp_number, MSG.devis_envoye(devis.numero));
 }
 
-// Import manquant
-async function getActiveSession(whatsappNumber: string) {
-  const { getActiveSession: get } = await import('../services/supabase.js');
-  return get(whatsappNumber);
-}

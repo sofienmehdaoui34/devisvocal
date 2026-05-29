@@ -44,6 +44,9 @@ export interface SessionContext {
   question_index?: number;
   reponses_clarification?: Record<string, string>;
 
+  // devis en cours d'extraction
+  devis_partiel?: unknown;
+
   // devis finalisé
   devis_id?: string;
   devis_token?: string;

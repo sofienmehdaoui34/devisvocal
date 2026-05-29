@@ -64,7 +64,7 @@ export async function searchEntrepriseBySiret(siret: string): Promise<Entreprise
       etab.uniteLegale?.activitePrincipaleUniteLegale ?? undefined;
 
     return {
-      nom: etab.uniteLegale?.denominationUniteLegale ?? etab.uniteLegale?.nomUniteLegale ?? nom,
+      nom: etab.uniteLegale?.denominationUniteLegale ?? etab.uniteLegale?.nomUniteLegale ?? siret,
       siret: cleanSiret,
       adresse,
       activite,
