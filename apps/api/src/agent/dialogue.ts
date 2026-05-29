@@ -15,7 +15,7 @@ import {
   sendDocument,
   getMediaUrl,
   MSG,
-} from '../services/whatsapp.js';
+} from '../services/telegram.js';
 import { transcribeAudioFromUrl } from '../services/whisper.js';
 import {
   extractDevisFromText,

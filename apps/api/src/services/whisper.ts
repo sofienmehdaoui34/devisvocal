@@ -2,17 +2,22 @@ import OpenAI from 'openai';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { downloadMedia } from './whatsapp.js';
+import { getMediaUrl, downloadMedia } from './telegram.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+/**
+ * Transcrit un audio Telegram (file_id) via Whisper.
+ * Telegram envoie des fichiers OGG/Opus pour les messages vocaux.
+ */
 export async function transcribeAudioFromUrl(
-  mediaUrl: string,
-  mimeType = 'audio/ogg'
+  fileId: string,
+  _mimeType = 'audio/ogg'
 ): Promise<string> {
-  const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'ogg';
-  const tmpFile = path.join(os.tmpdir(), `dv_audio_${Date.now()}.${ext}`);
+  // Résoudre le file_id en URL de téléchargement
+  const mediaUrl = await getMediaUrl(fileId);
 
+  const tmpFile = path.join(os.tmpdir(), `dv_audio_${Date.now()}.ogg`);
   const buffer = await downloadMedia(mediaUrl);
   fs.writeFileSync(tmpFile, buffer);
 
