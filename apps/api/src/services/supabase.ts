@@ -96,6 +96,15 @@ export async function completeSession(id: string): Promise<void> {
   if (error) throw error;
 }
 
+export async function completeAllUserSessions(whatsappNumber: string): Promise<void> {
+  const { error } = await supabase
+    .from('sessions')
+    .update({ state: 'COMPLETED' })
+    .eq('whatsapp_number', whatsappNumber)
+    .not('state', 'eq', 'COMPLETED');
+  if (error) throw error;
+}
+
 // ─── Devis ────────────────────────────────────────────────────────────────────
 
 export async function createDevis(params: {

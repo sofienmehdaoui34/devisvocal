@@ -5,6 +5,7 @@ import {
   createSession,
   updateSession,
   completeSession,
+  completeAllUserSessions,
   createDevis,
   incrementDevisCount,
   uploadPdf,
@@ -70,6 +71,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
 
   // Commande universelle RECOMMENCER
   if (normText(text) === 'RECOMMENCER') {
+    await completeAllUserSessions(msg.from);
     const newSession = await createSession(msg.from, artisan.id);
     await updateSession(newSession.id, 'MODE_CHOICE', {});
     await sendText(msg.from, MSG.mode_choice());
@@ -106,6 +108,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
       const n2 = normText(text);
       // L'artisan veut un nouveau devis
       if (n2.includes('NOUVEAU') || n2.includes('AUTRE') || n2.includes('NOUVEAU DEVIS') || n2 === 'NON') {
+        await completeAllUserSessions(msg.from);
         const newSession = await createSession(msg.from, artisan.id);
         await handleNew(msg.from, newSession.id);
         return;
@@ -116,6 +119,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
         await sendText(msg.from, MSG.lien_actif(linkUrl));
       } else {
         // Token perdu → repartir de zéro
+        await completeAllUserSessions(msg.from);
         const newSession = await createSession(msg.from, artisan.id);
         await handleNew(msg.from, newSession.id);
       }
@@ -125,6 +129,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
     case 'COMPLETED':
     case 'ONBOARDING': // legacy
     default: {
+      await completeAllUserSessions(msg.from);
       const newSession = await createSession(msg.from, artisan.id);
       await handleNew(msg.from, newSession.id);
       break;
