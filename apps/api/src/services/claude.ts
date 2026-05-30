@@ -49,7 +49,9 @@ JSON à retourner (exactement ce format) :
     ],
   });
 
-  const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}';
+  const rawText = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}';
+  // Strip markdown code fences if Claude wraps JSON in ```json ... ```
+  const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
   const parsed = JSON.parse(raw) as ExtractionResult;
 
   // Recalcul sécurisé des totaux
