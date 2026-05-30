@@ -52,7 +52,8 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
     text = msg.text ?? '';
   }
 
-  const ctx = session.context as SessionContext;
+  const rawCtx = session.context;
+  const ctx: SessionContext = typeof rawCtx === 'string' ? (JSON.parse(rawCtx || '{}') as SessionContext) : (rawCtx as SessionContext) ?? {};
 
   switch (session.state) {
     case 'NEW':
