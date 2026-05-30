@@ -3,6 +3,13 @@ import type { ExtractionResult, LigneDevis, Metier } from '@devisvocal/types';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ─── Helper : strip markdown fences ─────────────────────────────────────────
+function stripFences(text: string): string {
+  return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+}
+
+// ─── Tunnel ASSISTÉ : extraction depuis description libre ────────────────────
+
 const EXTRACTION_SYSTEM = `Tu es un assistant spécialisé dans la création de devis pour les artisans.
 Tu reçois une description d'un travail et tu extrais les informations pour un devis professionnel.
 
@@ -49,12 +56,9 @@ JSON à retourner (exactement ce format) :
     ],
   });
 
-  const rawText = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}';
-  // Strip markdown code fences if Claude wraps JSON in ```json ... ```
-  const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+  const raw = stripFences(message.content[0].type === 'text' ? message.content[0].text.trim() : '{}');
   const parsed = JSON.parse(raw) as ExtractionResult;
 
-  // Recalcul sécurisé des totaux
   parsed.lignes = parsed.lignes.map((l: LigneDevis) => ({
     ...l,
     total_ht: Math.round(l.quantite * l.prix_unitaire * 100) / 100,
@@ -62,6 +66,67 @@ JSON à retourner (exactement ce format) :
 
   return parsed;
 }
+
+// ─── Tunnel RAPIDE : splitter un montant TTC en étapes techniques ────────────
+
+const SPLIT_SYSTEM = `Tu es un expert en devis artisanal. Un artisan te donne la description de ses travaux et un montant TTC global.
+Tu dois générer un devis professionnel détaillé en décomposant ce montant en étapes techniques logiques.
+
+Règles ABSOLUES :
+- 4 à 6 postes dans l'ordre chronologique du chantier (préparation → réalisation → finitions)
+- La somme des total_ht × (1 + tva/100) doit être TRÈS PROCHE du montant TTC fourni
+- Prix unitaires cohérents et réalistes
+- Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks`;
+
+export async function splitMontantEnLignes(
+  description: string,
+  montantTTC: number,
+  devise = 'CHF'
+): Promise<ExtractionResult> {
+  const tva = devise === 'CHF' ? 8.1 : 20;
+  const montantHT = Math.round((montantTTC / (1 + tva / 100)) * 100) / 100;
+
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    system: SPLIT_SYSTEM,
+    messages: [
+      {
+        role: 'user',
+        content: `Travaux : "${description}"
+Montant TTC : ${montantTTC} ${devise}
+TVA : ${tva}%
+Montant HT cible : ${montantHT} ${devise}
+
+JSON à retourner :
+{
+  "lignes": [{"description":"...","quantite":1,"unite":"forfait","prix_unitaire":0,"total_ht":0}],
+  "client_nom": null,
+  "client_adresse": null,
+  "description_travaux": "résumé 1 phrase",
+  "date_debut_estimee": null,
+  "delai_execution": null,
+  "notes": null,
+  "questions_manquantes": [],
+  "confiance": "haute"
+}`,
+      },
+    ],
+  });
+
+  const raw = stripFences(message.content[0].type === 'text' ? message.content[0].text.trim() : '{}');
+  const parsed = JSON.parse(raw) as ExtractionResult;
+
+  // Recalc totals
+  parsed.lignes = parsed.lignes.map((l: LigneDevis) => ({
+    ...l,
+    total_ht: Math.round(l.quantite * l.prix_unitaire * 100) / 100,
+  }));
+
+  return parsed;
+}
+
+// ─── Utilitaires partagés ────────────────────────────────────────────────────
 
 export function computeTotals(
   lignes: LigneDevis[],
@@ -75,31 +140,33 @@ export function computeTotals(
 
 export function buildRecapMessage(
   extraction: ExtractionResult,
-  artisanNom: string
+  montantTtcOriginal?: number
 ): string {
-  const { montant_ht, montant_ttc } = computeTotals(extraction.lignes);
+  const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes);
   const lignesText = extraction.lignes
-    .map((l) => `  • ${l.description} — ${l.quantite} ${l.unite} × CHF ${l.prix_unitaire} = CHF ${l.total_ht.toFixed(2)}`)
+    .map((l) => `• ${l.description} — ${l.quantite} ${l.unite} × ${l.prix_unitaire.toFixed(0)} = ${l.total_ht.toFixed(0)} CHF HT`)
     .join('\n');
 
-  return `Voici le récap de votre devis 📋
+  const ttcDisplay = montantTtcOriginal ?? montant_ttc;
 
-👤 Client : ${extraction.client_nom ?? 'Non précisé'}
-🔨 Travaux : ${extraction.description_travaux}
-${extraction.date_debut_estimee ? `📅 Début estimé : ${extraction.date_debut_estimee}\n` : ''}
-📦 Lignes :
+  return `📋 *Récap de votre devis*
+
+🔨 ${extraction.description_travaux}
+${extraction.client_nom ? `👤 Client : ${extraction.client_nom}\n` : ''}
+*Détail des postes :*
 ${lignesText}
 
-💰 Montant HT : CHF ${montant_ht.toFixed(2)}
-💰 Montant TTC (TVA 8.1%) : CHF ${montant_ttc.toFixed(2)}
-${extraction.notes ? `\n📝 Notes : ${extraction.notes}` : ''}
+💰 Total HT : *${montant_ht.toFixed(2)} CHF*
+💰 TVA ${tva}% : *${(montant_ttc - montant_ht).toFixed(2)} CHF*
+💰 Total TTC : *${ttcDisplay.toFixed(2)} CHF*
+${extraction.notes ? `\n📝 ${extraction.notes}` : ''}
 
-✅ Tapez *OUI* pour générer le devis
-✏️ Tapez *CORRIGER* pour modifier quelque chose`;
+✅ Tapez *OUI* pour générer le devis et obtenir le lien
+✏️ Tapez *NON* pour recommencer`;
 }
 
 export function buildQuestionsMessage(questions: string[]): string {
   const limited = questions.slice(0, 3);
   const list = limited.map((q, i) => `${i + 1}. ${q}`).join('\n');
-  return `Presque prêt ! Il me manque juste :\n\n${list}\n\nRépondez à ces questions pour finaliser votre devis.`;
+  return `Presque prêt ! Il me manque juste quelques infos :\n\n${list}`;
 }

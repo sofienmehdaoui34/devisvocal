@@ -17,37 +17,39 @@ export type Metier =
 // ─── Session (état de la conversation WhatsApp) ───────────────────────────────
 
 export type SessionState =
-  | 'NEW'              // Premier contact
-  | 'ONBOARDING'       // Collecte nom entreprise, SIRET, email, métier
-  | 'COLLECTING'       // L'artisan décrit le travail
-  | 'EXTRACTING'       // Claude traite le texte (état transitoire)
-  | 'CLARIFYING'       // Questions de clarification (max 2 rounds)
-  | 'RECAP_SENT'       // Récap envoyé, attente confirmation artisan
-  | 'AWAITING_PAYMENT' // Lien Stripe envoyé
-  | 'COMPLETED';       // Payé et PDF livré
+  | 'NEW'                 // Premier contact
+  | 'MODE_CHOICE'         // Question discriminante envoyée, attente 1 ou 2
+  | 'RAPIDE_COLLECTING'   // Tunnel rapide : collecte description + montant
+  | 'ASSISTE_COLLECTING'  // Tunnel assisté : description libre → Claude extrait
+  | 'CLARIFYING'          // Questions de clarification (max 2 rounds, tunnel assisté)
+  | 'RECAP_SENT'          // Récap envoyé, attente OUI/NON
+  | 'AWAITING_PAYMENT'    // Lien paiement envoyé
+  | 'COMPLETED'           // PDF livré
+  // Legacy (compatibilité ascendante)
+  | 'ONBOARDING'
+  | 'COLLECTING'
+  | 'EXTRACTING';
 
 export interface SessionContext {
-  // onboarding
-  onboarding_step?: 'nom' | 'siret_confirm' | 'siret_manual' | 'email' | 'done';
-  nom_recherche?: string;     // nom tapé pour Google Maps
-  entreprise_suggeree?: {     // trouvée via Google Maps / Sirene
-    nom: string;
-    siret?: string;
-    adresse?: string;
-    activite?: string;
-  };
+  // Tunnel choisi
+  mode?: 'rapide' | 'assiste';
 
-  // devis en cours
+  // Tunnel RAPIDE
+  rapide_step?: 'description' | 'montant';
+  rapide_description?: string;
+  rapide_montant_ttc?: number;
+
+  // Tunnel ASSISTÉ
   description_brute?: string;
-  clarification_round?: number;     // 0, 1 ou 2 (max 2 allers-retours)
+  clarification_round?: number;
   questions_restantes?: string[];
   question_index?: number;
   reponses_clarification?: Record<string, string>;
 
-  // devis en cours d'extraction
+  // Devis en cours d'extraction
   devis_partiel?: unknown;
 
-  // devis finalisé
+  // Devis finalisé
   devis_id?: string;
   devis_token?: string;
   stripe_url?: string;

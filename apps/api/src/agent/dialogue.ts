@@ -1,7 +1,6 @@
-import type { Session, Artisan, WhatsAppInboundMessage, SessionContext, Metier } from '@devisvocal/types';
+import type { Artisan, WhatsAppInboundMessage, SessionContext } from '@devisvocal/types';
 import {
   findOrCreateArtisan,
-  updateArtisan,
   getActiveSession,
   createSession,
   updateSession,
@@ -19,18 +18,32 @@ import {
 import { transcribeAudioFromUrl } from '../services/whisper.js';
 import {
   extractDevisFromText,
+  splitMontantEnLignes,
   computeTotals,
   buildRecapMessage,
   buildQuestionsMessage,
 } from '../services/claude.js';
-import { searchEntrepriseByName, searchEntrepriseBySiret } from '../services/entreprise.js';
-import { createCheckoutSession, createOrGetStripeCustomer } from '../services/stripe.js';
+import { createCheckoutSession } from '../services/stripe.js';
 import { sendDevisEmail } from '../services/email.js';
 import { generateDevisToken } from '../utils/token.js';
 import { generateDevisPdf } from '@devisvocal/pdf';
 
 const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
 const MAX_CLARIFICATION_ROUNDS = 2;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function parseCtx(raw: unknown): SessionContext {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) as SessionContext; } catch { return {}; }
+  }
+  return raw as SessionContext;
+}
+
+function normText(text: string): string {
+  return text.trim().toUpperCase();
+}
 
 // ─── Point d'entrée principal ─────────────────────────────────────────────────
 
@@ -42,7 +55,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
     session = await createSession(msg.from, artisan.id);
   }
 
-  // Résoudre le texte (audio → Whisper si nécessaire)
+  // Audio → Whisper
   let text = '';
   if (msg.type === 'audio' && msg.audio_url) {
     await sendText(msg.from, MSG.attente_transcription());
@@ -52,20 +65,33 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
     text = msg.text ?? '';
   }
 
-  const rawCtx = session.context;
-  const ctx: SessionContext = typeof rawCtx === 'string' ? (JSON.parse(rawCtx || '{}') as SessionContext) : (rawCtx as SessionContext) ?? {};
+  const ctx = parseCtx(session.context);
+  const state = session.state;
 
-  switch (session.state) {
+  // Commande universelle RECOMMENCER
+  if (normText(text) === 'RECOMMENCER') {
+    const newSession = await createSession(msg.from, artisan.id);
+    await updateSession(newSession.id, 'MODE_CHOICE', {});
+    await sendText(msg.from, MSG.mode_choice());
+    return;
+  }
+
+  switch (state) {
     case 'NEW':
-      await handleNew(msg.from, artisan, session.id, ctx, text);
+      await handleNew(msg.from, session.id);
       break;
 
-    case 'ONBOARDING':
-      await handleOnboarding(msg.from, artisan, session.id, ctx, text);
+    case 'MODE_CHOICE':
+      await handleModeChoice(msg.from, session.id, ctx, text);
       break;
 
-    case 'COLLECTING':
-      await handleCollecting(msg.from, artisan, session.id, ctx, text);
+    case 'RAPIDE_COLLECTING':
+      await handleRapideCollecting(msg.from, artisan, session.id, ctx, text);
+      break;
+
+    case 'ASSISTE_COLLECTING':
+    case 'COLLECTING': // legacy
+      await handleAssisteCollecting(msg.from, artisan, session.id, ctx, text);
       break;
 
     case 'CLARIFYING':
@@ -77,174 +103,121 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
       break;
 
     case 'AWAITING_PAYMENT':
-      await sendText(msg.from, `Votre lien de paiement est déjà actif :\n${ctx.stripe_url}\n\nSi vous avez déjà payé, patientez quelques secondes.`);
+      await sendText(msg.from, MSG.lien_actif(ctx.stripe_url ?? `${APP_URL}/devis/${ctx.devis_token}`));
       break;
 
     case 'COMPLETED':
-      // Démarrer un nouveau devis
+    case 'ONBOARDING': // legacy
+    default: {
       const newSession = await createSession(msg.from, artisan.id);
-      await handleNew(msg.from, artisan, newSession.id, {}, text);
+      await handleNew(msg.from, newSession.id);
       break;
-
-    default:
-      await sendText(msg.from, MSG.erreur_generique());
+    }
   }
 }
 
-// ─── États ────────────────────────────────────────────────────────────────────
+// ─── NEW → question discriminante ────────────────────────────────────────────
 
-async function handleNew(
+async function handleNew(from: string, sessionId: string): Promise<void> {
+  await updateSession(sessionId, 'MODE_CHOICE', {});
+  await sendText(from, MSG.mode_choice());
+}
+
+// ─── MODE_CHOICE ──────────────────────────────────────────────────────────────
+
+async function handleModeChoice(
   from: string,
-  artisan: Artisan,
   sessionId: string,
   ctx: SessionContext,
-  _text: string
+  text: string
 ): Promise<void> {
-  // Si artisan déjà onboardé → aller directement à COLLECTING
-  if (artisan.nom_entreprise && artisan.email) {
-    await updateSession(sessionId, 'COLLECTING', ctx);
-    await sendText(from, MSG.demande_travaux());
+  const n = normText(text);
+
+  if (n === '1' || n.includes('RAPIDE') || n.includes('PRIX') || n.includes('FIXE')) {
+    await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, mode: 'rapide', rapide_step: 'description' });
+    await sendText(from, MSG.rapide_demande_description());
     return;
   }
 
-  await updateSession(sessionId, 'ONBOARDING', { ...ctx, onboarding_step: 'nom' });
-  await sendText(from, MSG.accueil());
+  if (n === '2' || n.includes('AIDE') || n.includes('CHIFFR') || n.includes('ASSIST')) {
+    await updateSession(sessionId, 'ASSISTE_COLLECTING', { ...ctx, mode: 'assiste' });
+    await sendText(from, MSG.assiste_demande_travaux());
+    return;
+  }
+
+  // Réponse non reconnue → rappeler les options
+  await sendText(from, `Répondez *1* pour le devis rapide ou *2* pour l'aide au chiffrage.`);
 }
 
-async function handleOnboarding(
+// ─── TUNNEL RAPIDE ────────────────────────────────────────────────────────────
+
+async function handleRapideCollecting(
   from: string,
   artisan: Artisan,
   sessionId: string,
   ctx: SessionContext,
   text: string
 ): Promise<void> {
-  const step = ctx.onboarding_step ?? 'nom';
-  const normalized = text.trim().toUpperCase();
+  const step = ctx.rapide_step ?? 'description';
 
-  if (step === 'nom') {
-    const nomRecherche = text.trim();
-    ctx.nom_recherche = nomRecherche;
-
-    // Recherche Google Maps
-    const entreprise = await searchEntrepriseByName(nomRecherche);
-    if (entreprise) {
-      ctx.entreprise_suggeree = entreprise;
-      ctx.onboarding_step = 'siret_confirm';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, MSG.entreprise_trouvee(entreprise.nom, entreprise.adresse ?? ''));
-    } else {
-      ctx.onboarding_step = 'siret_manual';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, MSG.entreprise_non_trouvee());
+  // Étape 1 : collecter la description
+  if (step === 'description') {
+    const description = text.trim();
+    if (description.length < 5) {
+      await sendText(from, `Pouvez-vous décrire les travaux en quelques mots ? (ex: "Pose carrelage 20m²")`);
+      return;
     }
+    ctx.rapide_description = description;
+    ctx.rapide_step = 'montant';
+    await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
+    await sendText(from, MSG.rapide_demande_montant(description));
     return;
   }
 
-  if (step === 'siret_confirm') {
-    if (normalized === 'OUI') {
-      // Confirmer l'entreprise suggérée
-      const e = ctx.entreprise_suggeree!;
-      await updateArtisan(artisan.id, {
-        nom_entreprise: e.nom,
-        siret: e.siret,
-        adresse: e.adresse,
-        activite: e.activite,
-      });
-      ctx.onboarding_step = 'email';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, MSG.onboarding_email(e.nom));
-    } else {
-      // Correction manuelle
-      ctx.entreprise_suggeree = undefined;
-      ctx.onboarding_step = 'siret_manual';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, `D'accord ! Quel est le nom exact de votre entreprise ?`);
-    }
-    return;
-  }
+  // Étape 2 : collecter le montant
+  if (step === 'montant') {
+    const cleaned = text.replace(/[^\d.,]/g, '').replace(',', '.');
+    const montant = parseFloat(cleaned);
 
-  if (step === 'siret_manual') {
-    const input = text.trim();
-
-    if (normalized === 'PASSER') {
-      // Continuer sans SIRET
-      const nom = ctx.nom_recherche ?? input;
-      await updateArtisan(artisan.id, { nom_entreprise: nom });
-      ctx.onboarding_step = 'email';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, MSG.onboarding_email(nom));
+    if (isNaN(montant) || montant <= 0) {
+      await sendText(from, `Je n'ai pas compris le montant. Entrez juste le chiffre, ex: *1500* ou *2800.50*`);
       return;
     }
 
-    // Vérifier si c'est un SIRET (14 chiffres)
-    const isSiret = /^\d{14}$/.test(input.replace(/\s/g, ''));
-    if (isSiret) {
-      const info = await searchEntrepriseBySiret(input);
-      const nom = info?.nom ?? ctx.nom_recherche ?? input;
-      await updateArtisan(artisan.id, {
-        nom_entreprise: nom,
-        siret: input.replace(/\s/g, ''),
-        adresse: info?.adresse,
-        activite: info?.activite,
-      });
-      ctx.onboarding_step = 'email';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, MSG.onboarding_email(nom));
-    } else {
-      // C'est un nom d'entreprise manuel
-      await updateArtisan(artisan.id, { nom_entreprise: input });
-      ctx.nom_recherche = input;
-      ctx.onboarding_step = 'email';
-      await updateSession(sessionId, 'ONBOARDING', ctx);
-      await sendText(from, MSG.onboarding_email(input));
+    ctx.rapide_montant_ttc = montant;
+    await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
+    await sendText(from, MSG.rapide_analyse());
+
+    try {
+      const extraction = await splitMontantEnLignes(
+        ctx.rapide_description ?? '',
+        montant,
+        'CHF'
+      );
+      ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
+      await updateSession(sessionId, 'RECAP_SENT', ctx);
+      await sendText(from, buildRecapMessage(extraction, montant));
+    } catch (err) {
+      console.error('[rapide] split error', err);
+      await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
+      await sendText(from, `Désolé, je n'ai pas pu analyser ça. Réessayons — décrivez les travaux :`);
     }
-    return;
-  }
-
-  if (step === 'email') {
-    const email = text.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!emailRegex.test(email)) {
-      await sendText(from, `Format email invalide. Veuillez retaper votre adresse email (ex: contact@monentreprise.ch)`);
-      return;
-    }
-
-    // Créer client Stripe (optionnel — on le fait au moment du paiement si clé absente)
-    let stripeCustomerId = artisan.stripe_customer_id;
-    if (!stripeCustomerId && process.env.STRIPE_SECRET_KEY) {
-      try {
-        stripeCustomerId = await createOrGetStripeCustomer(
-          email,
-          artisan.nom_entreprise ?? 'Artisan',
-          from
-        );
-      } catch (e) {
-        console.warn('[onboarding] Stripe customer creation skipped:', e);
-      }
-    }
-
-    await updateArtisan(artisan.id, { email, stripe_customer_id: stripeCustomerId });
-    ctx.onboarding_step = 'done';
-    await updateSession(sessionId, 'COLLECTING', ctx);
-
-    await sendText(from, `Parfait ! 🎉 Bienvenue sur DevisVocal !\n\n${MSG.demande_travaux()}`);
     return;
   }
 }
 
-async function handleCollecting(
+// ─── TUNNEL ASSISTÉ ───────────────────────────────────────────────────────────
+
+async function handleAssisteCollecting(
   from: string,
   artisan: Artisan,
   sessionId: string,
   ctx: SessionContext,
   text: string
 ): Promise<void> {
-  // Accumuler la description brute
   ctx.description_brute = ctx.description_brute
     ? `${ctx.description_brute}\n${text}`
     : text;
-
   ctx.clarification_round = ctx.clarification_round ?? 0;
 
   await sendText(from, MSG.attente_extraction());
@@ -256,28 +229,26 @@ async function handleCollecting(
       artisan.metier ?? 'autre'
     );
 
-    // Des questions bloquantes existent et on n'a pas dépassé le max
     if (
       extraction.questions_manquantes.length > 0 &&
-      (ctx.clarification_round ?? 0) < MAX_CLARIFICATION_ROUNDS
+      ctx.clarification_round < MAX_CLARIFICATION_ROUNDS
     ) {
       ctx.questions_restantes = extraction.questions_manquantes;
       ctx.question_index = 0;
       ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
-      ctx.clarification_round = (ctx.clarification_round ?? 0) + 1;
+      ctx.clarification_round += 1;
       await updateSession(sessionId, 'CLARIFYING', ctx);
       await sendText(from, buildQuestionsMessage(extraction.questions_manquantes));
       return;
     }
 
-    // Génération du récap
     ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
     await updateSession(sessionId, 'RECAP_SENT', ctx);
-    await sendText(from, buildRecapMessage(extraction, artisan.nom_entreprise ?? ''));
+    await sendText(from, buildRecapMessage(extraction));
   } catch (err) {
-    console.error('[dialogue] extraction error', err);
-    await updateSession(sessionId, 'COLLECTING', ctx);
-    await sendText(from, `Je n'ai pas bien compris. Pouvez-vous décrire les travaux différemment ?`);
+    console.error('[assiste] extraction error', err);
+    await updateSession(sessionId, 'ASSISTE_COLLECTING', ctx);
+    await sendText(from, `Je n'ai pas bien compris. Pouvez-vous reformuler la description des travaux ?`);
   }
 }
 
@@ -288,7 +259,6 @@ async function handleClarifying(
   ctx: SessionContext,
   text: string
 ): Promise<void> {
-  // Enregistrer la réponse
   const questions = ctx.questions_restantes ?? [];
   const idx = ctx.question_index ?? 0;
   const currentQuestion = questions[idx];
@@ -298,11 +268,9 @@ async function handleClarifying(
       ...(ctx.reponses_clarification ?? {}),
       [currentQuestion]: text,
     };
-    // Ajouter la réponse à la description brute pour ré-extraction
     ctx.description_brute = `${ctx.description_brute ?? ''}\n${currentQuestion}: ${text}`;
   }
 
-  // Re-extraire avec les nouvelles infos
   await sendText(from, MSG.attente_extraction());
   await updateSession(sessionId, 'EXTRACTING', ctx);
 
@@ -312,7 +280,6 @@ async function handleClarifying(
       artisan.metier ?? 'autre'
     );
 
-    // Encore des questions et encore un round disponible ?
     if (
       extraction.questions_manquantes.length > 0 &&
       (ctx.clarification_round ?? 0) < MAX_CLARIFICATION_ROUNDS
@@ -324,16 +291,18 @@ async function handleClarifying(
       return;
     }
 
-    // On génère avec ce qu'on a
     ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
     await updateSession(sessionId, 'RECAP_SENT', ctx);
-    await sendText(from, buildRecapMessage(extraction, artisan.nom_entreprise ?? ''));
+    await sendText(from, buildRecapMessage(extraction));
   } catch (err) {
-    console.error('[dialogue] clarifying error', err);
+    console.error('[clarifying] error', err);
+    ctx.devis_partiel = ctx.devis_partiel; // keep existing
     await updateSession(sessionId, 'RECAP_SENT', ctx);
-    await sendText(from, `D'accord, je génère le devis avec les informations disponibles.\n\n${MSG.attente_extraction()}`);
+    await sendText(from, `Je génère le devis avec les informations disponibles.\n\n${MSG.attente_extraction()}`);
   }
 }
+
+// ─── RECAP_SENT ───────────────────────────────────────────────────────────────
 
 async function handleRecapResponse(
   from: string,
@@ -342,29 +311,38 @@ async function handleRecapResponse(
   ctx: SessionContext,
   text: string
 ): Promise<void> {
-  const normalized = text.trim().toUpperCase();
+  const n = normText(text);
 
-  if (normalized === 'OUI' || normalized === 'YES' || normalized === 'OK') {
-    // Créer le devis en base et envoyer le lien Stripe
+  if (n === 'OUI' || n === 'YES' || n === 'OK' || n === 'C\'EST BON') {
     await createDevisAndSendLink(from, artisan, sessionId, ctx);
     return;
   }
 
-  if (normalized === 'CORRIGER' || normalized === 'NON' || normalized === 'NO') {
-    // Relancer la collecte
-    ctx.description_brute = undefined;
-    ctx.clarification_round = 0;
-    await updateSession(sessionId, 'COLLECTING', ctx);
-    await sendText(from, `D'accord ! Redécrivez-moi les travaux avec les corrections.`);
+  if (n === 'NON' || n === 'NO' || n === 'CORRIGER' || n === 'NON CORRIGER') {
+    // Retour au bon tunnel
+    const backState = ctx.mode === 'rapide' ? 'RAPIDE_COLLECTING' : 'ASSISTE_COLLECTING';
+    const backCtx: SessionContext = ctx.mode === 'rapide'
+      ? { ...ctx, rapide_step: 'description', devis_partiel: undefined }
+      : { ...ctx, description_brute: undefined, clarification_round: 0, devis_partiel: undefined };
+    await updateSession(sessionId, backState, backCtx);
+    await sendText(from, ctx.mode === 'rapide'
+      ? MSG.rapide_demande_description()
+      : `D'accord, redécrivez les travaux avec les corrections :`
+    );
     return;
   }
 
-  // Si l'artisan envoie une correction directe
-  ctx.description_brute = text;
-  await handleCollecting(from, artisan, sessionId, ctx, text);
+  // Texte libre → traiter comme correction directe
+  if (ctx.mode === 'rapide') {
+    await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
+    await handleRapideCollecting(from, artisan, sessionId, { ...ctx, rapide_step: 'description' }, text);
+  } else {
+    ctx.description_brute = text;
+    await handleAssisteCollecting(from, artisan, sessionId, ctx, text);
+  }
 }
 
-// ─── Création devis + lien Stripe ─────────────────────────────────────────────
+// ─── Création devis + lien ────────────────────────────────────────────────────
 
 async function createDevisAndSendLink(
   from: string,
@@ -398,13 +376,11 @@ async function createDevisAndSendLink(
     montantTtc: montant_ttc,
   });
 
-  // Re-générer le token avec le vrai ID
   const finalToken = generateDevisToken(devis.id);
   await import('../services/supabase.js').then(m =>
     m.updateDevisStatut(devis.id, 'en_attente_paiement', { token: finalToken })
   );
 
-  // Créer la session Stripe (optionnel si clé absente — mode test sans paiement)
   let linkUrl: string;
   if (process.env.STRIPE_SECRET_KEY) {
     try {
@@ -422,49 +398,39 @@ async function createDevisAndSendLink(
       linkUrl = `${APP_URL}/devis/${finalToken}`;
     }
   } else {
-    // Mode dev — lien direct sans paiement
     linkUrl = `${APP_URL}/devis/${finalToken}`;
   }
 
   ctx.devis_id = devis.id;
   ctx.devis_token = finalToken;
   await updateSession(sessionId, 'AWAITING_PAYMENT', ctx);
-
   await sendText(from, MSG.lien_devis(linkUrl));
 }
 
-// ─── Post-paiement : génération PDF + livraison ────────────────────────────────
+// ─── Post-paiement ────────────────────────────────────────────────────────────
 
 export async function handlePaymentSuccess(
   stripeSessionId: string,
-  paymentIntentId: string
+  _paymentIntentId: string
 ): Promise<void> {
-  const { getDevisByStripeSession, getArtisanById, updateDevisStatut, savePaiement } = await import('../services/supabase.js');
-
-  // Retrouver via les métadonnées Stripe → token stocké dans la session checkout
+  const { getArtisanById, updateDevisStatut, savePaiement, getDevisByToken } = await import('../services/supabase.js');
   const { getCheckoutSession } = await import('../services/stripe.js');
+
   const stripeSession = await getCheckoutSession(stripeSessionId);
   const devisToken = stripeSession.metadata?.devis_token;
   if (!devisToken) throw new Error('devis_token missing from Stripe metadata');
 
-  const { getDevisByToken } = await import('../services/supabase.js');
   const devis = await getDevisByToken(devisToken);
   if (!devis) throw new Error(`Devis non trouvé pour token ${devisToken}`);
 
   const artisan = await getArtisanById(devis.artisan_id);
   if (!artisan) throw new Error(`Artisan non trouvé ${devis.artisan_id}`);
 
-  // Enregistrer le paiement
-  await savePaiement(devis.id, paymentIntentId, devis.montant_ttc);
+  await savePaiement(devis.id, _paymentIntentId, devis.montant_ttc);
 
-  // Générer le PDF
   const pdfBuffer = await generateDevisPdf(devis, artisan);
+  const pdfUrl = await uploadPdf(devis.id, pdfBuffer);
 
-  // Uploader dans Supabase Storage
-  const { uploadPdf: upload } = await import('../services/supabase.js');
-  const pdfUrl = await upload(devis.id, pdfBuffer);
-
-  // Mettre à jour le statut
   await updateDevisStatut(devis.id, 'payé', {
     pdf_url: pdfUrl,
     paid_at: new Date().toISOString(),
@@ -472,44 +438,19 @@ export async function handlePaymentSuccess(
 
   await incrementDevisCount(artisan.id);
 
-  // Envoyer PDF par WhatsApp
-  await sendDocument(
-    artisan.whatsapp_number,
-    pdfUrl,
-    `${devis.numero}.pdf`,
-    `Votre devis ${devis.numero} est prêt !`
-  );
+  await sendDocument(artisan.whatsapp_number, pdfUrl, `${devis.numero}.pdf`, `Votre devis ${devis.numero} est prêt !`);
 
-  // Envoyer PDF par email à l'artisan
   if (artisan.email) {
-    await sendDevisEmail({
-      devis,
-      artisan,
-      pdfBuffer,
-      recipientEmail: artisan.email,
-      isArtisan: true,
-    });
+    await sendDevisEmail({ devis, artisan, pdfBuffer, recipientEmail: artisan.email, isArtisan: true });
   }
-
-  // Envoyer PDF par email au client si renseigné
   if (devis.client_email) {
-    await sendDevisEmail({
-      devis,
-      artisan,
-      pdfBuffer,
-      recipientEmail: devis.client_email,
-      isArtisan: false,
-    });
+    await sendDevisEmail({ devis, artisan, pdfBuffer, recipientEmail: devis.client_email, isArtisan: false });
   }
 
-  // Marquer devis envoyé
   await updateDevisStatut(devis.id, 'envoyé', { delivered_at: new Date().toISOString() });
 
-  // Compléter la session WhatsApp
   const session = await getActiveSession(artisan.whatsapp_number);
   if (session) await completeSession(session.id);
 
-  // Dernier message WhatsApp
   await sendText(artisan.whatsapp_number, MSG.devis_envoye(devis.numero));
 }
-

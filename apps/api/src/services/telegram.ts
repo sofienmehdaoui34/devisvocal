@@ -54,65 +54,73 @@ export async function setWebhook(webhookUrl: string): Promise<void> {
   console.log('✅ Telegram webhook set:', res.data);
 }
 
-// ─── Messages standards (identiques à la version WhatsApp) ───────────────────
+// ─── Messages ────────────────────────────────────────────────────────────────
 
 export const MSG = {
-  accueil: () =>
-    `Bonjour\\! 👷 Je suis *DevisVocal*, votre assistant devis\\.
 
-Je génère vos devis professionnels en quelques minutes\\.
+  // Question discriminante — premier message
+  mode_choice: () =>
+    `👷 Bienvenue sur *DevisVocal* !
 
-Pour commencer, quel est le *nom de votre entreprise* ?`,
+Je génère vos devis professionnels en quelques minutes.
 
-  attente_transcription: () => `Je transcris votre message vocal\\.\\.\\. ⏳`,
+Comment souhaitez-vous créer votre devis ?
 
-  attente_extraction: () => `J'analyse votre description\\.\\.\\. 🤖`,
+*1️⃣ Mon prix est fixé* → je génère un PDF pro en 1 min
+*2️⃣ Aide-moi à chiffrer* → on construit ensemble
 
-  onboarding_email: (nomEntreprise: string) =>
-    `Parfait, *${escMd(nomEntreprise)}* \\!
+Répondez *1* ou *2*`,
 
-Quelle est votre *adresse email* pour recevoir vos devis ?`,
+  // Tunnel RAPIDE
+  rapide_demande_description: () =>
+    `Parfait ! 💨 Devis rapide.
 
-  entreprise_trouvee: (nom: string, adresse: string) =>
-    `J'ai trouvé : *${escMd(nom)}*, ${escMd(adresse)}\\.
+Décrivez les travaux en quelques mots :
+_(ex: "Pose parquet chêne 40m²", "Rénovation salle de bain complète", "Peinture appartement 3 pièces")_`,
 
-C'est bien vous ? Répondez *OUI* pour confirmer, ou *NON* pour corriger\\.`,
+  rapide_demande_montant: (description: string) =>
+    `✅ *${description}*
 
-  entreprise_non_trouvee: () =>
-    `Je n'ai pas trouvé votre entreprise\\.
+Quel est votre montant total TTC ?
+_(ex: 1500, 2800.50)_`,
 
-Pouvez\\-vous me donner votre *numéro SIRET* \\(ou taper *PASSER* pour continuer\\) ?`,
+  rapide_analyse: () => `Je décompose votre devis en étapes professionnelles... 🤖`,
 
-  demande_travaux: () =>
-    `Parfait \\! 🎉
+  // Tunnel ASSISTÉ
+  assiste_demande_travaux: () =>
+    `Parfait ! Décrivez-moi le chantier :
 
-Décrivez\\-moi le chantier en message vocal ou texte :
 • La nature des travaux
-• Le nom du client
 • Les surfaces ou quantités
-• Votre estimation de prix \\(ou je suggère un tarif marché\\)`,
+• Le nom du client _(optionnel)_
+• Votre estimation de prix _(optionnel, sinon je suggère le tarif marché)_
 
+En message vocal ou texte 🎤`,
+
+  attente_extraction: () => `J'analyse votre description... 🤖`,
+  attente_transcription: () => `Je transcris votre message vocal... ⏳`,
+
+  // Lien devis
   lien_devis: (url: string) =>
-    `Votre devis est prêt \\! 🎉
+    `✅ Votre devis est prêt !
 
-Téléchargez\\-le ici \\(*valable 24h*\\) :
+Validez et téléchargez-le ici *(valable 24h)* :
 ${url}
 
-Le PDF vous sera envoyé ici et par email après paiement \\(2\\.90 CHF\\)\\.`,
+Le PDF vous sera envoyé ici après paiement *(2.90 CHF)*.`,
 
+  // Post-paiement
   devis_envoye: (numero: string) =>
-    `✅ Votre devis *${escMd(numero)}* a été payé et envoyé \\!
+    `✅ Votre devis *${numero}* a été généré et envoyé !
 
-Bonne continuation \\! 🙌
+Bonne continuation 🙌
 
-Tapez n'importe quoi pour créer un nouveau devis\\.`,
+Tapez n'importe quoi pour créer un nouveau devis.`,
 
+  // Erreurs
   erreur_generique: () =>
-    `Désolé, une erreur s'est produite\\. 😕
-Tapez *RECOMMENCER* pour réessayer\\.`,
-};
+    `Désolé, une erreur s'est produite 😕\nTapez *RECOMMENCER* pour réessayer.`,
 
-// Echapper les caractères spéciaux Markdown v2 Telegram
-function escMd(text: string): string {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
-}
+  lien_actif: (url: string) =>
+    `Votre lien de paiement est déjà actif :\n${url}\n\nSi vous avez déjà payé, patientez quelques secondes.`,
+};
