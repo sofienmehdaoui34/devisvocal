@@ -122,5 +122,5 @@ Tapez n'importe quoi pour créer un nouveau devis.`,
     `Désolé, une erreur s'est produite 😕\nTapez *RECOMMENCER* pour réessayer.`,
 
   lien_actif: (url: string) =>
-    `Votre lien de paiement est déjà actif :\n${url}\n\nSi vous avez déjà payé, patientez quelques secondes.`,
+    `Votre devis est en attente de paiement :\n${url}\n\nSi vous avez déjà payé, patientez quelques secondes.\n\nPour créer un *nouveau devis*, tapez *NOUVEAU*.`,
 };

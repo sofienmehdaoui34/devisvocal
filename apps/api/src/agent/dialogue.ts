@@ -102,9 +102,25 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage): Promise
       await handleRecapResponse(msg.from, artisan, session.id, ctx, text);
       break;
 
-    case 'AWAITING_PAYMENT':
-      await sendText(msg.from, MSG.lien_actif(ctx.stripe_url ?? `${APP_URL}/devis/${ctx.devis_token}`));
+    case 'AWAITING_PAYMENT': {
+      const n2 = normText(text);
+      // L'artisan veut un nouveau devis
+      if (n2.includes('NOUVEAU') || n2.includes('AUTRE') || n2.includes('NOUVEAU DEVIS') || n2 === 'NON') {
+        const newSession = await createSession(msg.from, artisan.id);
+        await handleNew(msg.from, newSession.id);
+        return;
+      }
+      // Lien valide → rappeler
+      const linkUrl = ctx.stripe_url ?? (ctx.devis_token ? `${APP_URL}/devis/${ctx.devis_token}` : null);
+      if (linkUrl) {
+        await sendText(msg.from, MSG.lien_actif(linkUrl));
+      } else {
+        // Token perdu → repartir de zéro
+        const newSession = await createSession(msg.from, artisan.id);
+        await handleNew(msg.from, newSession.id);
+      }
       break;
+    }
 
     case 'COMPLETED':
     case 'ONBOARDING': // legacy
