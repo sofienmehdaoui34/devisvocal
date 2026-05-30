@@ -22,7 +22,7 @@ export async function findOrCreateArtisan(whatsappNumber: string): Promise<Artis
 
   const { data: created, error: createErr } = await supabase
     .from('artisans')
-    .insert({ whatsapp_number: whatsappNumber })
+    .upsert({ whatsapp_number: whatsappNumber }, { onConflict: 'whatsapp_number', ignoreDuplicates: false })
     .select()
     .single();
 
