@@ -191,6 +191,17 @@ async function handleModeChoice(
   await channel.sendText(from, `Répondez *1* pour le devis rapide ou *2* pour l'aide au chiffrage.`);
 }
 
+// ─── Extrait un montant depuis un texte libre ────────────────────────────────
+// ex: "Pose carrelage 80m² à 5000 CHF HT" → 5000
+function extractMontantFromText(text: string): number | null {
+  // Patterns : "1500 chf", "à 2800", "pour 3000€", "5 000 fr", "1'500.50"
+  const match = text.match(/(?:à|pour|:\s*)?\b(\d[\d\s'.,]*\d|\d)\s*(?:chf|eur|€|fr\.?|frs?|francs?)?(?:\s*(?:ht|ttc|hors\s*taxe))?\b/i);
+  if (!match) return null;
+  const cleaned = match[1].replace(/[\s',]/g, '').replace(',', '.');
+  const val = parseFloat(cleaned);
+  return isNaN(val) || val <= 0 ? null : val;
+}
+
 // ─── TUNNEL RAPIDE ────────────────────────────────────────────────────────────
 
 async function handleRapideCollecting(
@@ -209,6 +220,28 @@ async function handleRapideCollecting(
       await channel.sendText(from, `Pouvez-vous décrire les travaux en quelques mots ? (ex: "Pose carrelage 20m²")`);
       return;
     }
+
+    // Si le montant est déjà dans la description, on saute l'étape
+    const montantDetecte = extractMontantFromText(description);
+    if (montantDetecte) {
+      ctx.rapide_description = description;
+      ctx.rapide_montant_ttc = montantDetecte;
+      await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
+      await channel.sendText(from, MSG.rapide_analyse());
+      try {
+        const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF');
+        ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
+        await updateSession(sessionId, 'RECAP_SENT', ctx);
+        await channel.sendText(from, buildRecapMessage(extraction, montantDetecte));
+      } catch (err) {
+        console.error('[rapide] split error (auto-montant)', err);
+        ctx.rapide_step = 'montant';
+        await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
+        await channel.sendText(from, MSG.rapide_demande_montant(description));
+      }
+      return;
+    }
+
     ctx.rapide_description = description;
     ctx.rapide_step = 'montant';
     await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
