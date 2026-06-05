@@ -10,6 +10,8 @@ import {
   createDevis,
   incrementDevisCount,
   uploadPdf,
+  findClientByName,
+  upsertClient,
 } from '../services/supabase.js';
 import { MSG } from '../services/telegram.js';
 import { transcribeAudioFromUrl } from '../services/whisper.js';
@@ -348,6 +350,7 @@ async function createDevisAndSendLink(
   const extraction = ctx.devis_partiel as unknown as {
     lignes: Array<{ description: string; quantite: number; unite: string; prix_unitaire: number; total_ht: number }>;
     client_nom?: string;
+    client_adresse?: string;
     description_travaux: string;
     notes?: string;
   };
@@ -357,13 +360,41 @@ async function createDevisAndSendLink(
     return;
   }
 
+  // ─── Gestion client ────────────────────────────────────────────────────────
+  let clientId = ctx.client_id;
+  const clientNom = extraction.client_nom ?? ctx.client_nom;
+  const clientAdresse = extraction.client_adresse ?? ctx.client_adresse;
+
+  try {
+    if (clientNom) {
+      // Chercher client existant ou en créer un nouveau
+      const existing = clientId ? null : await findClientByName(artisan.id, clientNom);
+      const savedClient = await upsertClient(
+        artisan.id,
+        {
+          nom: clientNom,
+          adresse: clientAdresse,
+          email: ctx.client_email,
+          telephone: ctx.client_telephone,
+          type_chantier: extraction.description_travaux?.split(' ').slice(0, 5).join(' '),
+        },
+        existing?.id ?? clientId
+      );
+      clientId = savedClient.id;
+      ctx.client_id = clientId;
+    }
+  } catch (err) {
+    console.warn('[client] upsert error (non-bloquant):', err);
+  }
+
   const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes);
   const token = generateDevisToken('pending');
 
   const devis = await createDevis({
     artisanId: artisan.id,
     token,
-    clientNom: extraction.client_nom,
+    clientNom,
+    clientId,
     travauxDescription: extraction.description_travaux,
     lignes: extraction.lignes,
     montantHt: montant_ht,

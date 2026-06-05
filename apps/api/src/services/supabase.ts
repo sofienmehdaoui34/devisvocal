@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Artisan, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut } from '@devisvocal/types';
+import type { Artisan, Client, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut } from '@devisvocal/types';
 
 const supabase = createClient(
   process.env.SUPABASE_URL ?? 'https://placeholder.supabase.co',
@@ -111,6 +111,7 @@ export async function createDevis(params: {
   artisanId: string;
   token: string;
   clientNom?: string;
+  clientId?: string;
   clientEmail?: string;
   travauxDescription: string;
   lignes: LigneDevis[];
@@ -124,6 +125,7 @@ export async function createDevis(params: {
       artisan_id: params.artisanId,
       numero: '',
       token: params.token,
+      client_id: params.clientId,
       client_nom: params.clientNom,
       client_email: params.clientEmail,
       travaux_description: params.travauxDescription,
@@ -202,6 +204,56 @@ export async function incrementDevisCount(artisanId: string): Promise<void> {
   const artisan = await getArtisanById(artisanId);
   if (!artisan) return;
   await updateArtisan(artisanId, { devis_count: (artisan.devis_count ?? 0) + 1 });
+}
+
+// ─── Clients ─────────────────────────────────────────────────────────────────
+
+export async function findClientByName(artisanId: string, nom: string): Promise<Client | null> {
+  if (!nom?.trim()) return null;
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('artisan_id', artisanId)
+    .ilike('nom', `%${nom.trim()}%`)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return (data as Client) ?? null;
+}
+
+export async function upsertClient(
+  artisanId: string,
+  data: { nom?: string; email?: string; telephone?: string; adresse?: string; type_chantier?: string; notes?: string },
+  existingId?: string
+): Promise<Client> {
+  if (existingId) {
+    const { data: updated, error } = await supabase
+      .from('clients')
+      .update({ ...data, updated_at: new Date().toISOString() })
+      .eq('id', existingId)
+      .select()
+      .single();
+    if (error) throw error;
+    return updated as Client;
+  }
+  const { data: created, error } = await supabase
+    .from('clients')
+    .insert({ artisan_id: artisanId, ...data })
+    .select()
+    .single();
+  if (error) throw error;
+  return created as Client;
+}
+
+export async function listClients(artisanId: string): Promise<Client[]> {
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('artisan_id', artisanId)
+    .order('updated_at', { ascending: false });
+  if (error) throw error;
+  return (data as Client[]) ?? [];
 }
 
 // ─── Supabase Storage (PDF) ───────────────────────────────────────────────────

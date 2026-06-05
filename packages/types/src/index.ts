@@ -49,6 +49,13 @@ export interface SessionContext {
   // Devis en cours d'extraction
   devis_partiel?: unknown;
 
+  // Client lié au devis
+  client_id?: string;
+  client_nom?: string;
+  client_email?: string;
+  client_telephone?: string;
+  client_adresse?: string;
+
   // Devis finalisé
   devis_id?: string;
   devis_token?: string;
@@ -161,6 +168,21 @@ export interface ExtractionResult {
   notes?: string;
   questions_manquantes: string[];
   confiance: 'haute' | 'moyenne' | 'faible';
+}
+
+// ─── Client ───────────────────────────────────────────────────────────────────
+
+export interface Client {
+  id: string;
+  artisan_id: string;
+  nom?: string;
+  email?: string;
+  telephone?: string;
+  adresse?: string;
+  type_chantier?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // ─── Résultat recherche entreprise ───────────────────────────────────────────
