@@ -14,7 +14,7 @@ import {
   upsertClient,
 } from '../services/supabase.js';
 import { MSG } from '../services/telegram.js';
-import { transcribeAudioFromUrl } from '../services/whisper.js';
+import { transcribeAudioBuffer } from '../services/whisper.js';
 import {
   extractDevisFromText,
   splitMontantEnLignes,
@@ -85,8 +85,15 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
   let text = '';
   if (msg.type === 'audio' && msg.audio_url) {
     await sendText(msg.from, MSG.attente_transcription());
-    const mediaUrl = await getMediaUrl(msg.audio_url);
-    text = await transcribeAudioFromUrl(mediaUrl, msg.audio_mime);
+    try {
+      const mediaUrl = await getMediaUrl(msg.audio_url);
+      const buffer   = await channel.downloadMedia(mediaUrl);
+      text = await transcribeAudioBuffer(buffer, msg.audio_mime);
+    } catch (err) {
+      console.error('[audio] transcription error:', err);
+      await sendText(msg.from, `Désolé, je n'ai pas pu transcrire votre message vocal 😕\nPouvez-vous écrire votre description en texte ?`);
+      return;
+    }
   } else {
     text = msg.text ?? '';
   }
@@ -249,7 +256,8 @@ async function handleAssisteCollecting(
   ctx.clarification_round = ctx.clarification_round ?? 0;
 
   await channel.sendText(from, MSG.attente_extraction());
-  await updateSession(sessionId, 'EXTRACTING', ctx);
+  // On garde ASSISTE_COLLECTING pendant l'extraction (EXTRACTING peut bloquer la contrainte DB)
+  await updateSession(sessionId, 'ASSISTE_COLLECTING', ctx);
 
   try {
     const extraction = await extractDevisFromText(ctx.description_brute, artisan.metier ?? 'autre');
@@ -292,7 +300,7 @@ async function handleClarifying(
   }
 
   await channel.sendText(from, MSG.attente_extraction());
-  await updateSession(sessionId, 'EXTRACTING', ctx);
+  await updateSession(sessionId, 'CLARIFYING', ctx);
 
   try {
     const extraction = await extractDevisFromText(ctx.description_brute ?? text, artisan.metier ?? 'autre');
