@@ -131,14 +131,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
       break;
 
     case 'AWAITING_PAYMENT': {
-      const n2 = normText(text);
-      // L'artisan veut retrouver son lien → on le lui renvoie
-      if (n2.includes('LIEN') || n2.includes('PAIEMENT') || n2.includes('URL')) {
-        const linkUrl = ctx.stripe_url ?? (ctx.devis_token ? `${APP_URL}/devis/${ctx.devis_token}` : null);
-        if (linkUrl) await channel.sendText(msg.from, MSG.lien_actif(linkUrl));
-        break;
-      }
-      // Tout autre message = nouveau devis (OUI, 1, n'importe quoi)
+      // N'importe quel message = nouveau devis
       await completeAllUserSessions(msg.from);
       const newSession = await createSession(msg.from, artisan.id);
       await handleNew(msg.from, newSession.id, channel, artisan);
