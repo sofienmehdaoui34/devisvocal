@@ -1,8 +1,22 @@
 import { Router, type Request, type Response } from 'express';
+import type { Channel } from '../services/channel.js';
 import { constructWebhookEvent } from '../services/stripe.js';
 import { handlePaymentSuccess } from '../agent/dialogue.js';
+import * as telegram from '../services/telegram.js';
+import * as whatsapp from '../services/whatsapp.js';
 
 const router = Router();
+
+// ─── Détecte le canal selon l'identifiant ────────────────────────────────────
+// Telegram : ID numérique sans "+"  (ex: 1739274808)
+// WhatsApp  : numéro E.164 avec "+" (ex: +41791234567)
+
+function channelFor(number: string): Channel {
+  if (number.startsWith('+')) {
+    return { sendText: whatsapp.sendText, sendDocument: whatsapp.sendDocument, getMediaUrl: whatsapp.getMediaUrl };
+  }
+  return { sendText: telegram.sendText, sendDocument: telegram.sendDocument, getMediaUrl: telegram.getMediaUrl };
+}
 
 // Ce handler doit recevoir le raw body (configuré dans index.ts)
 router.post('/', async (req: Request, res: Response) => {
@@ -25,10 +39,13 @@ router.post('/', async (req: Request, res: Response) => {
         id: string;
         payment_status: string;
         payment_intent: string;
+        metadata?: { artisan_number?: string };
       };
 
       if (session.payment_status === 'paid') {
-        await handlePaymentSuccess(session.id, session.payment_intent);
+        const artisanNumber = session.metadata?.artisan_number ?? '';
+        const channel = channelFor(artisanNumber);
+        await handlePaymentSuccess(session.id, session.payment_intent, channel);
       }
     }
   } catch (err) {

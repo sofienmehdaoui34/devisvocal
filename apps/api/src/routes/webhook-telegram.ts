@@ -1,6 +1,14 @@
 import { Router, type Request, type Response } from 'express';
 import type { WhatsAppInboundMessage } from '@devisvocal/types';
+import type { Channel } from '../services/channel.js';
 import { handleInboundMessage } from '../agent/dialogue.js';
+import * as telegram from '../services/telegram.js';
+
+const telegramChannel: Channel = {
+  sendText: telegram.sendText,
+  sendDocument: telegram.sendDocument,
+  getMediaUrl: telegram.getMediaUrl,
+};
 
 const router = Router();
 
@@ -28,7 +36,7 @@ router.post('/', async (req: Request, res: Response) => {
       timestamp: message.date,
     };
 
-    handleInboundMessage(inbound).catch((err) => {
+    handleInboundMessage(inbound, telegramChannel).catch((err) => {
       console.error(`[telegram-webhook] error for chat ${chatId}:`, err);
     });
   } catch (err) {

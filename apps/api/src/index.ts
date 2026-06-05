@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import webhookTelegram from './routes/webhook-telegram.js';
+import webhookWhatsapp from './routes/webhook-whatsapp.js';
 import webhookStripe from './routes/webhook-stripe.js';
 import devisRouter from './routes/devis.js';
 import { setWebhook } from './services/telegram.js';
@@ -29,6 +30,7 @@ app.use((req, res, next) => {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/webhook/telegram', webhookTelegram);
+app.use('/webhook/whatsapp', webhookWhatsapp);
 app.use('/api/devis', devisRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));

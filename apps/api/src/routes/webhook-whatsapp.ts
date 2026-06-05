@@ -1,69 +1,54 @@
 import { Router, type Request, type Response } from 'express';
+import express from 'express';
 import type { WhatsAppInboundMessage } from '@devisvocal/types';
 import { handleInboundMessage } from '../agent/dialogue.js';
+import { whatsappChannel } from '../services/whatsapp.js';
 
 const router = Router();
 
-// Vérification webhook 360dialog (GET)
-router.get('/', (req: Request, res: Response) => {
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
+// ─── Vérification webhook Twilio (GET, optionnel) ─────────────────────────────
 
-  if (token === process.env.WHATSAPP_WEBHOOK_SECRET) {
-    res.status(200).send(challenge);
-  } else {
-    res.status(403).send('Forbidden');
-  }
+router.get('/', (_req: Request, res: Response) => {
+  res.status(200).send('OK');
 });
 
-// Réception messages (POST)
-router.post('/', async (req: Request, res: Response) => {
-  // Répondre immédiatement 200 à 360dialog
-  res.status(200).json({ status: 'ok' });
+// ─── Réception messages Twilio WhatsApp (POST) ───────────────────────────────
+// Twilio envoie du application/x-www-form-urlencoded
+
+router.post('/', express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
+  // Répondre avec TwiML vide (obligatoire < 1s)
+  res.status(200).type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
 
   try {
-    const body = req.body as WebhookBody;
-    const contacts = body.contacts ?? [];
-    const messages = body.messages ?? [];
+    const body   = req.body as Record<string, string>;
+    const rawFrom = body.From ?? '';
+    const from   = rawFrom.replace('whatsapp:', ''); // +41791234567
+    const text   = body.Body ?? '';
+    const numMedia = parseInt(body.NumMedia ?? '0', 10);
+    const mediaUrl  = body.MediaUrl0;
+    const mediaMime = body.MediaContentType0;
 
-    for (const message of messages) {
-      const from = message.from;
-      const contact = contacts.find((c) => c.wa_id === from);
+    if (!from) return;
 
-      const inbound: WhatsAppInboundMessage = {
-        from,
-        message_id: message.id,
-        type: message.type as WhatsAppInboundMessage['type'],
-        text: message.text?.body,
-        audio_url: message.audio?.id,
-        audio_mime: message.audio?.mime_type,
-        timestamp: parseInt(message.timestamp, 10),
-      };
+    // Détecter le type : audio si media avec mime audio/*
+    const isAudio = numMedia > 0 && mediaMime?.startsWith('audio/');
 
-      // Traitement asynchrone — ne pas bloquer le 200
-      handleInboundMessage(inbound).catch((err) => {
-        console.error(`[webhook] error processing message from ${from}:`, err);
-      });
-    }
+    const inbound: WhatsAppInboundMessage = {
+      from,
+      message_id: body.MessageSid ?? Date.now().toString(),
+      type: isAudio ? 'audio' : 'text',
+      text: text || undefined,
+      audio_url: isAudio ? mediaUrl : undefined,
+      audio_mime: isAudio ? mediaMime : undefined,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    handleInboundMessage(inbound, whatsappChannel).catch((err) => {
+      console.error(`[whatsapp-webhook] error for ${from}:`, err);
+    });
   } catch (err) {
-    console.error('[webhook] parse error:', err);
+    console.error('[whatsapp-webhook] parse error:', err);
   }
 });
 
 export default router;
-
-// ─── Types 360dialog ─────────────────────────────────────────────────────────
-
-interface WebhookBody {
-  contacts?: Array<{ profile: { name: string }; wa_id: string }>;
-  messages?: Array<{
-    from: string;
-    id: string;
-    timestamp: string;
-    type: string;
-    text?: { body: string };
-    audio?: { id: string; mime_type: string };
-    image?: { id: string; mime_type: string };
-    document?: { id: string; filename: string; mime_type: string };
-  }>;
-}
