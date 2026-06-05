@@ -1,6 +1,5 @@
 import { Router, type Request, type Response } from 'express';
 import { getDevisByToken, getArtisanById, updateArtisan } from '../services/supabase.js';
-import { verifyDevisToken } from '../utils/token.js';
 import { createCheckoutSession } from '../services/stripe.js';
 
 const router = Router();
@@ -10,12 +9,6 @@ const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
 // GET /api/devis/:token — récupération pour la page web
 router.get('/:token', async (req: Request, res: Response) => {
   const { token } = req.params;
-
-  const payload = verifyDevisToken(token);
-  if (!payload) {
-    res.status(401).json({ error: 'Token invalide ou expiré' });
-    return;
-  }
 
   const devis = await getDevisByToken(token);
   if (!devis) {
@@ -36,12 +29,6 @@ router.get('/:token', async (req: Request, res: Response) => {
 // POST /api/devis/:token/pay — création session Stripe Checkout
 router.post('/:token/pay', async (req: Request, res: Response) => {
   const { token } = req.params;
-
-  const payload = verifyDevisToken(token);
-  if (!payload) {
-    res.status(401).json({ error: 'Token invalide ou expiré' });
-    return;
-  }
 
   const devis = await getDevisByToken(token);
   if (!devis) {

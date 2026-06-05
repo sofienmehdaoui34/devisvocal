@@ -455,11 +455,11 @@ async function createDevisAndSendLink(
   }
 
   const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes);
-  const token = generateDevisToken('pending');
+  const finalToken = generateDevisToken();
 
   const devis = await createDevis({
     artisanId: artisan.id,
-    token,
+    token: finalToken,
     clientNom,
     clientId,
     travauxDescription: extraction.description_travaux,
@@ -469,9 +469,8 @@ async function createDevisAndSendLink(
     montantTtc: montant_ttc,
   });
 
-  const finalToken = generateDevisToken(devis.id);
   await import('../services/supabase.js').then(m =>
-    m.updateDevisStatut(devis.id, 'en_attente_paiement', { token: finalToken })
+    m.updateDevisStatut(devis.id, 'en_attente_paiement', {})
   );
 
   let linkUrl: string;
