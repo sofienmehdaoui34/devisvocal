@@ -5,7 +5,7 @@ import type { Channel } from './channel.js';
 
 const SID   = () => process.env.TWILIO_ACCOUNT_SID   ?? '';
 const TOKEN = () => process.env.TWILIO_AUTH_TOKEN     ?? '';
-const FROM  = () => process.env.TWILIO_WHATSAPP_NUMBER ?? 'whatsapp:+14155238886';
+const FROM  = () => toWA(process.env.TWILIO_WHATSAPP_NUMBER ?? '+14155238886');
 
 function msgsUrl() {
   return `https://api.twilio.com/2010-04-01/Accounts/${SID()}/Messages.json`;
