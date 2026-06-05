@@ -105,4 +105,5 @@ export const whatsappChannel: Channel = {
   sendText,
   sendDocument,
   getMediaUrl,
+  downloadMedia,
 };
