@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useTransition } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import type { Devis, Artisan } from '@devisvocal/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -9,13 +9,20 @@ const fmt = (n: number) => `CHF ${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, 
 
 export default function DevisPage() {
   const { token } = useParams<{ token: string }>();
-  const router = useRouter();
 
   const [devis, setDevis] = useState<Devis | null>(null);
   const [artisan, setArtisan] = useState<Artisan | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [clientEmail, setClientEmail] = useState('');
   const [isPending, startTransition] = useTransition();
+
+  // Infos client (email pour recevoir le PDF)
+  const [clientEmail, setClientEmail] = useState('');
+
+  // Infos artisan (collectées si manquantes)
+  const [artisanNom, setArtisanNom] = useState('');
+  const [artisanEmail, setArtisanEmail] = useState('');
+  const [artisanTel, setArtisanTel] = useState('');
+  const [artisanAdresse, setArtisanAdresse] = useState('');
 
   useEffect(() => {
     fetch(`${API_URL}/api/devis/${token}`)
@@ -27,17 +34,29 @@ export default function DevisPage() {
           setDevis(data.devis);
           setArtisan(data.artisan);
           setClientEmail(data.devis.client_email ?? '');
+          // Pré-remplir ce qu'on a déjà
+          setArtisanNom(data.artisan?.nom_entreprise ?? '');
+          setArtisanEmail(data.artisan?.email ?? '');
         }
       })
       .catch(() => setError('Impossible de charger le devis.'));
   }, [token]);
+
+  // Profil artisan incomplet ?
+  const profileIncomplet = artisan && (!artisan.nom_entreprise || !artisan.email);
 
   const handlePay = () => {
     startTransition(async () => {
       const res = await fetch(`${API_URL}/api/devis/${token}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_email: clientEmail }),
+        body: JSON.stringify({
+          client_email: clientEmail || undefined,
+          artisan_nom_entreprise: artisanNom || undefined,
+          artisan_email: artisanEmail || undefined,
+          artisan_telephone: artisanTel || undefined,
+          artisan_adresse: artisanAdresse || undefined,
+        }),
       });
       const data = await res.json() as { url?: string; error?: string };
       if (data.url) {
@@ -82,7 +101,7 @@ export default function DevisPage() {
               <p className="text-blue-200 text-sm font-medium uppercase tracking-wide">Devis</p>
               <h1 className="text-2xl font-bold mt-1">{devis.numero}</h1>
               <p className="text-blue-200 text-sm mt-1">
-                {artisan?.nom_entreprise ?? 'Votre prestataire'}
+                {artisan?.nom_entreprise ?? 'Votre entreprise'}
               </p>
             </div>
             <div className="text-right">
@@ -98,7 +117,7 @@ export default function DevisPage() {
             <span className="text-2xl">✅</span>
             <div>
               <p className="font-semibold text-green-800">Devis payé</p>
-              <p className="text-green-600 text-sm">Le PDF a été envoyé par WhatsApp et email.</p>
+              <p className="text-green-600 text-sm">Le PDF a été envoyé par Telegram/WhatsApp et email.</p>
             </div>
           </div>
         )}
@@ -109,18 +128,19 @@ export default function DevisPage() {
             <span className="text-2xl">⏰</span>
             <div>
               <p className="font-semibold text-orange-800">Lien expiré</p>
-              <p className="text-orange-600 text-sm">Retournez sur WhatsApp pour générer un nouveau lien.</p>
+              <p className="text-orange-600 text-sm">Retournez sur le bot pour générer un nouveau lien.</p>
             </div>
           </div>
         )}
 
+        {/* Devis */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-6">
 
           {/* Parties */}
           <div className="grid grid-cols-2 gap-4 p-6 border-b border-gray-100">
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Prestataire</p>
-              <p className="font-semibold text-gray-900">{artisan?.nom_entreprise}</p>
+              <p className="font-semibold text-gray-900">{artisan?.nom_entreprise ?? '—'}</p>
               {artisan?.adresse && <p className="text-gray-500 text-sm">{artisan.adresse}</p>}
             </div>
             <div>
@@ -171,7 +191,7 @@ export default function DevisPage() {
             </div>
             <div className="flex justify-between text-sm text-gray-600">
               <span>TVA {devis.tva}%</span>
-              <span>{fmt(Math.round((devis.montant_ht * devis.tva) / 100 * 100) / 100)}</span>
+              <span>{fmt(Math.round(devis.montant_ht * devis.tva / 100 * 100) / 100)}</span>
             </div>
             <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t border-gray-100">
               <span>TOTAL TTC</span>
@@ -182,12 +202,67 @@ export default function DevisPage() {
 
         {/* Zone paiement */}
         {!isPaid && !isExpired && (
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h2 className="font-bold text-gray-900 mb-4">Télécharger le PDF — 2.90 CHF</h2>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
+            <h2 className="font-bold text-gray-900 text-lg">Télécharger le PDF — 2.90 CHF</h2>
 
-            <div className="mb-4">
+            {/* Profil artisan — affiché seulement si incomplet */}
+            {profileIncomplet && (
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-3">
+                <p className="text-sm font-semibold text-blue-800">
+                  Complétez votre profil — apparaîtra sur tous vos PDFs
+                </p>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Nom / Entreprise <span className="text-blue-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={artisanNom}
+                      onChange={(e) => setArtisanNom(e.target.value)}
+                      placeholder="Plomberie Dupont"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Email pro</label>
+                    <input
+                      type="email"
+                      value={artisanEmail}
+                      onChange={(e) => setArtisanEmail(e.target.value)}
+                      placeholder="contact@plomberie-dupont.ch"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Téléphone</label>
+                    <input
+                      type="tel"
+                      value={artisanTel}
+                      onChange={(e) => setArtisanTel(e.target.value)}
+                      placeholder="+41 79 123 45 67"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Adresse</label>
+                    <input
+                      type="text"
+                      value={artisanAdresse}
+                      onChange={(e) => setArtisanAdresse(e.target.value)}
+                      placeholder="Rue des Artisans 12, 1201 Genève"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Email client */}
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Email pour recevoir le PDF (optionnel)
+                Email de votre client pour recevoir le PDF (optionnel)
               </label>
               <input
                 type="email"
@@ -213,7 +288,7 @@ export default function DevisPage() {
               )}
             </button>
 
-            <p className="text-xs text-gray-400 text-center mt-3">
+            <p className="text-xs text-gray-400 text-center">
               Paiement sécurisé par Stripe · CB, Apple Pay, Google Pay
             </p>
           </div>

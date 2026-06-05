@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { getDevisByToken, getArtisanById } from '../services/supabase.js';
+import { getDevisByToken, getArtisanById, updateArtisan } from '../services/supabase.js';
 import { verifyDevisToken } from '../utils/token.js';
 import { createCheckoutSession } from '../services/stripe.js';
 
@@ -56,8 +56,37 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
 
   const artisan = await getArtisanById(devis.artisan_id);
 
-  // Mettre à jour l'email client si fourni depuis la page web
-  const { client_email } = req.body as { client_email?: string };
+  const {
+    client_email,
+    artisan_nom_entreprise,
+    artisan_prenom,
+    artisan_email,
+    artisan_telephone,
+    artisan_adresse,
+    artisan_siret,
+  } = req.body as {
+    client_email?: string;
+    artisan_nom_entreprise?: string;
+    artisan_prenom?: string;
+    artisan_email?: string;
+    artisan_telephone?: string;
+    artisan_adresse?: string;
+    artisan_siret?: string;
+  };
+
+  // Sauvegarder les infos artisan (profil) si fournies
+  if (artisan && (artisan_nom_entreprise || artisan_email || artisan_prenom)) {
+    const patch: Record<string, string> = {};
+    if (artisan_nom_entreprise && !artisan.nom_entreprise) patch.nom_entreprise = artisan_nom_entreprise;
+    if (artisan_email && !artisan.email)                  patch.email = artisan_email;
+    if (artisan_adresse && !artisan.adresse)              patch.adresse = artisan_adresse;
+    if (artisan_siret && !artisan.siret)                  patch.siret = artisan_siret;
+    // prénom stocké dans nom_entreprise si pas de nom entreprise
+    if (artisan_prenom && !artisan.nom_entreprise)        patch.nom_entreprise = artisan_prenom;
+    if (Object.keys(patch).length > 0) await updateArtisan(artisan.id, patch);
+  }
+
+  // Sauvegarder l'email client sur le devis si fourni
   if (client_email) {
     const { updateDevisStatut } = await import('../services/supabase.js');
     await updateDevisStatut(devis.id, devis.statut, { client_email });
