@@ -15,12 +15,17 @@ app.use('/webhook/stripe', express.raw({ type: 'application/json' }), webhookStr
 // ─── Middlewares globaux ──────────────────────────────────────────────────────
 app.use(express.json());
 
-// ─── CORS simple (pour Next.js) ───────────────────────────────────────────────
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   const origin = req.headers.origin ?? '';
-  const allowed = [process.env.APP_URL ?? '', 'http://localhost:3000'].filter(Boolean);
-  if (allowed.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  // Autoriser : localhost, Vercel (*.vercel.app), domaine prod
+  const isAllowed =
+    !origin ||
+    origin.startsWith('http://localhost') ||
+    origin.endsWith('.vercel.app') ||
+    origin === (process.env.APP_URL ?? '');
+  if (isAllowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   }
