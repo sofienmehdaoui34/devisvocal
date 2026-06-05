@@ -132,20 +132,16 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
 
     case 'AWAITING_PAYMENT': {
       const n2 = normText(text);
-      if (n2.includes('NOUVEAU') || n2.includes('AUTRE') || n2.includes('NOUVEAU DEVIS') || n2 === 'NON') {
-        await completeAllUserSessions(msg.from);
-        const newSession = await createSession(msg.from, artisan.id);
-        await handleNew(msg.from, newSession.id, channel);
-        return;
+      // L'artisan veut retrouver son lien → on le lui renvoie
+      if (n2.includes('LIEN') || n2.includes('PAIEMENT') || n2.includes('URL')) {
+        const linkUrl = ctx.stripe_url ?? (ctx.devis_token ? `${APP_URL}/devis/${ctx.devis_token}` : null);
+        if (linkUrl) await channel.sendText(msg.from, MSG.lien_actif(linkUrl));
+        break;
       }
-      const linkUrl = ctx.stripe_url ?? (ctx.devis_token ? `${APP_URL}/devis/${ctx.devis_token}` : null);
-      if (linkUrl) {
-        await sendText(msg.from, MSG.lien_actif(linkUrl));
-      } else {
-        await completeAllUserSessions(msg.from);
-        const newSession = await createSession(msg.from, artisan.id);
-        await handleNew(msg.from, newSession.id, channel);
-      }
+      // Tout autre message = nouveau devis (OUI, 1, n'importe quoi)
+      await completeAllUserSessions(msg.from);
+      const newSession = await createSession(msg.from, artisan.id);
+      await handleNew(msg.from, newSession.id, channel, artisan);
       break;
     }
 

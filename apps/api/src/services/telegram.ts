@@ -115,7 +115,10 @@ En message vocal ou texte 🎤`,
 Validez et téléchargez-le ici *(valable 24h)* :
 ${url}
 
-Le PDF vous sera envoyé ici après paiement *(2.90 CHF)*.`,
+Le PDF vous sera envoyé ici après paiement *(2.90 CHF)*.
+
+━━━━━━━━━━━━━
+➕ Répondez *OUI* pour créer un autre devis`,
 
   // Post-paiement
   devis_envoye: (numero: string) =>
