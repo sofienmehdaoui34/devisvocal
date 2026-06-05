@@ -31,6 +31,10 @@ export type SessionState =
   | 'EXTRACTING';
 
 export interface SessionContext {
+  // Devise et TVA détectées depuis le numéro de téléphone
+  devise?: 'CHF' | 'EUR';
+  tva?: number;
+
   // Tunnel choisi
   mode?: 'rapide' | 'assiste';
 

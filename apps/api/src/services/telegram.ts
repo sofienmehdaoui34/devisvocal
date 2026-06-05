@@ -58,9 +58,17 @@ export async function setWebhook(webhookUrl: string): Promise<void> {
 
 export const MSG = {
 
-  // Question discriminante — premier message
-  mode_choice: () =>
-    `👷 Bienvenue sur *DevisVocal* !
+  // Question discriminante — premier message (personnalisé si nom connu)
+  mode_choice: (nom?: string) => nom
+    ? `👋 Bonjour *${nom}* !
+
+Nouveau devis ?
+
+*1️⃣ Mon prix est fixé* → PDF pro en 1 min
+*2️⃣ Aide-moi à chiffrer* → on construit ensemble
+
+Répondez *1* ou *2*`
+    : `👷 Bienvenue sur *DevisVocal* !
 
 Je génère vos devis professionnels en quelques minutes.
 

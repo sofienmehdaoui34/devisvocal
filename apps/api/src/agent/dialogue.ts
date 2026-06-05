@@ -44,6 +44,31 @@ function normText(text: string): string {
   return text.trim().toUpperCase();
 }
 
+// Devise + TVA selon préfixe du numéro de téléphone
+function getDevise(from: string): { devise: string; tva: number } {
+  if (from.startsWith('+33') || from.startsWith('0033')) return { devise: 'EUR', tva: 20 };
+  if (from.startsWith('+32') || from.startsWith('0032')) return { devise: 'EUR', tva: 21 };
+  return { devise: 'CHF', tva: 8.1 }; // Suisse par défaut
+}
+
+// Détection du métier depuis la description des travaux
+import type { Metier } from '@devisvocal/types';
+function inferMetier(description: string): Metier | null {
+  const d = description.toLowerCase();
+  if (/plomb|chaudière|chauffage|sanitaire|robinet|canalisation|wc|douche/.test(d)) return 'plombier';
+  if (/électr|câbl|tableau|prise|disjoncteur|éclairage|interrupteur/.test(d))       return 'electricien';
+  if (/carrelage|faïence|dallage|joint|céramique/.test(d))                           return 'carreleur';
+  if (/peinture|enduit|crépi|façade|lasure|mur|plafond/.test(d))                     return 'peintre';
+  if (/maçon|béton|parpaing|fondation|mur porteur|terrassement/.test(d))             return 'macon';
+  if (/menuiserie|parquet|porte|fenêtre|escalier|volet|bois/.test(d))                return 'menuisier';
+  if (/cuisine|plan de travail|meuble cuisine|électroménager/.test(d))               return 'cuisiniste';
+  if (/jardin|pelouse|haie|plantation|gazon|taille/.test(d))                         return 'paysagiste';
+  if (/nettoyage|ménage|vitrage|entretien|désinfection/.test(d))                     return 'nettoyage';
+  if (/déménag|transport|livraison|emballage/.test(d))                               return 'demenageur';
+  if (/garage|voiture|auto|mécanique|pneu|vidange/.test(d))                          return 'garagiste';
+  return null;
+}
+
 // ─── Point d'entrée principal ─────────────────────────────────────────────────
 
 export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel: Channel): Promise<void> {
@@ -80,8 +105,9 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
 
   switch (state) {
     case 'NEW':
-      await handleNew(msg.from, session.id, channel);
+      await handleNew(msg.from, session.id, channel, artisan);
       break;
+
 
     case 'MODE_CHOICE':
       await handleModeChoice(msg.from, session.id, ctx, text, channel);
@@ -136,9 +162,11 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
 
 // ─── NEW → question discriminante ────────────────────────────────────────────
 
-async function handleNew(from: string, sessionId: string, channel: Channel): Promise<void> {
-  await updateSession(sessionId, 'MODE_CHOICE', {});
-  await channel.sendText(from, MSG.mode_choice());
+async function handleNew(from: string, sessionId: string, channel: Channel, artisan?: import('@devisvocal/types').Artisan): Promise<void> {
+  const { devise, tva } = getDevise(from);
+  await updateSession(sessionId, 'MODE_CHOICE', { devise: devise as 'CHF' | 'EUR', tva });
+  const nom = artisan?.nom_entreprise ?? undefined;
+  await channel.sendText(from, MSG.mode_choice(nom));
 }
 
 // ─── MODE_CHOICE ──────────────────────────────────────────────────────────────
@@ -206,7 +234,7 @@ async function handleRapideCollecting(
     await channel.sendText(from, MSG.rapide_analyse());
 
     try {
-      const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, 'CHF');
+      const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF');
       ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
       await updateSession(sessionId, 'RECAP_SENT', ctx);
       await channel.sendText(from, buildRecapMessage(extraction, montant));
@@ -358,6 +386,15 @@ async function createDevisAndSendLink(
   if (!extraction?.lignes?.length) {
     await channel.sendText(from, MSG.erreur_generique());
     return;
+  }
+
+  // ─── Détection métier (silencieuse, une seule fois) ───────────────────────
+  if (!artisan.metier || artisan.metier === 'autre') {
+    const metierDetecte = inferMetier(extraction.description_travaux ?? '');
+    if (metierDetecte) {
+      try { await import('../services/supabase.js').then(m => m.updateArtisan(artisan.id, { metier: metierDetecte })); }
+      catch (e) { console.warn('[metier] save error:', e); }
+    }
   }
 
   // ─── Gestion client ────────────────────────────────────────────────────────
