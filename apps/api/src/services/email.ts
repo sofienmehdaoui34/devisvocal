@@ -1,10 +1,16 @@
 import { Resend } from 'resend';
 import type { Devis, Artisan } from '@devisvocal/types';
 
-// Lazy init — évite le crash au démarrage si la clé n'est pas encore configurée
+// Lazy init — retourne null si la clé n'est pas configurée
 let _resend: Resend | null = null;
-const getResend = () => {
-  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY ?? 'placeholder');
+const getResend = (): Resend | null => {
+  if (_resend) return _resend;
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    console.warn('[email] RESEND_API_KEY manquant — envoi email désactivé');
+    return null;
+  }
+  _resend = new Resend(key);
   return _resend;
 };
 
@@ -26,7 +32,10 @@ export async function sendDevisEmail(params: {
     ? artisanEmailHtml(devis, artisan)
     : clientEmailHtml(devis, artisan);
 
-  await getResend().emails.send({
+  const resend = getResend();
+  if (!resend) return; // Email désactivé si pas de clé Resend
+
+  await resend.emails.send({
     from: FROM,
     to: recipientEmail,
     subject,

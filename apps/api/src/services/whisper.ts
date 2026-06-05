@@ -2,10 +2,9 @@ import OpenAI from 'openai';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getMediaUrl, downloadMedia } from './telegram.js';
 
 let _openai: OpenAI | null = null;
-function getOpenAI() {
+function getOpenAI(): OpenAI {
   if (!_openai) {
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error('OPENAI_API_KEY manquant — transcription vocale désactivée');
@@ -14,30 +13,37 @@ function getOpenAI() {
   return _openai;
 }
 
+// Extension de fichier à partir du mime type
+function extFromMime(mime?: string): string {
+  if (!mime) return '.ogg';
+  if (mime.includes('mp4') || mime.includes('m4a')) return '.mp4';
+  if (mime.includes('mpeg') || mime.includes('mp3')) return '.mp3';
+  if (mime.includes('wav'))                           return '.wav';
+  if (mime.includes('webm'))                          return '.webm';
+  return '.ogg'; // OGG/Opus — défaut Telegram & WhatsApp
+}
+
 /**
- * Transcrit un audio Telegram (file_id) via Whisper.
- * Telegram envoie des fichiers OGG/Opus pour les messages vocaux.
+ * Transcrit un buffer audio via OpenAI Whisper.
+ * Compatible Telegram (OGG/Opus) et WhatsApp Twilio (OGG/MP4).
  */
-export async function transcribeAudioFromUrl(
-  fileId: string,
-  _mimeType = 'audio/ogg'
+export async function transcribeAudioBuffer(
+  buffer: Buffer,
+  mimeType?: string
 ): Promise<string> {
   const openai = getOpenAI();
-  // Résoudre le file_id en URL de téléchargement
-  const mediaUrl = await getMediaUrl(fileId);
+  const ext    = extFromMime(mimeType);
+  const tmpFile = path.join(os.tmpdir(), `dv_audio_${Date.now()}${ext}`);
 
-  const tmpFile = path.join(os.tmpdir(), `dv_audio_${Date.now()}.ogg`);
-  const buffer = await downloadMedia(mediaUrl);
   fs.writeFileSync(tmpFile, buffer);
-
   try {
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tmpFile),
-      model: 'whisper-1',
+      file:     fs.createReadStream(tmpFile),
+      model:    'whisper-1',
       language: 'fr',
     });
     return transcription.text;
   } finally {
-    fs.unlinkSync(tmpFile);
+    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
   }
 }

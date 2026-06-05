@@ -13,9 +13,19 @@ const router = Router();
 
 function channelFor(number: string): Channel {
   if (number.startsWith('+')) {
-    return { sendText: whatsapp.sendText, sendDocument: whatsapp.sendDocument, getMediaUrl: whatsapp.getMediaUrl };
+    return {
+      sendText:      whatsapp.sendText,
+      sendDocument:  whatsapp.sendDocument,
+      getMediaUrl:   whatsapp.getMediaUrl,
+      downloadMedia: whatsapp.downloadMedia,
+    };
   }
-  return { sendText: telegram.sendText, sendDocument: telegram.sendDocument, getMediaUrl: telegram.getMediaUrl };
+  return {
+    sendText:      telegram.sendText,
+    sendDocument:  telegram.sendDocument,
+    getMediaUrl:   telegram.getMediaUrl,
+    downloadMedia: telegram.downloadMedia,
+  };
 }
 
 // Ce handler doit recevoir le raw body (configuré dans index.ts)

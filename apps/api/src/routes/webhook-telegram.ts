@@ -8,6 +8,7 @@ const telegramChannel: Channel = {
   sendText: telegram.sendText,
   sendDocument: telegram.sendDocument,
   getMediaUrl: telegram.getMediaUrl,
+  downloadMedia: telegram.downloadMedia,
 };
 
 const router = Router();
