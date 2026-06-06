@@ -13,10 +13,19 @@ export async function createCheckoutSession(params: {
   stripeCustomerId?: string;
   appUrl: string;
 }): Promise<{ url: string; sessionId: string }> {
+  // Stripe interdit customer ET customer_email ensemble.
+  // On n'inclut qu'UNE seule clé (ou aucune) via spread conditionnel —
+  // jamais une clé à null/undefined qui ferait planter l'appel.
+  const customerParams: { customer?: string; customer_email?: string } =
+    params.stripeCustomerId
+      ? { customer: params.stripeCustomerId }
+      : params.artisanEmail
+        ? { customer_email: params.artisanEmail }
+        : {};
+
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
-    customer: params.stripeCustomerId,
-    customer_email: !params.stripeCustomerId ? params.artisanEmail : undefined,
+    ...customerParams,
     line_items: [
       {
         price_data: {
