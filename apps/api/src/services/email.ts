@@ -14,7 +14,9 @@ const getResend = (): Resend | null => {
   return _resend;
 };
 
-const FROM = `${process.env.EMAIL_FROM_NAME ?? 'DevisVocal'} <${process.env.EMAIL_FROM ?? 'devis@devisvocal.ch'}>`;
+// Expéditeur : par défaut le domaine de test Resend (marche sans vérif DNS).
+// Pour la prod, définir EMAIL_FROM avec un domaine vérifié sur Resend.
+const FROM = `${process.env.EMAIL_FROM_NAME ?? 'DevisVocal'} <${process.env.EMAIL_FROM ?? 'onboarding@resend.dev'}>`;
 
 export async function sendDevisEmail(params: {
   devis: Devis;
@@ -35,18 +37,28 @@ export async function sendDevisEmail(params: {
   const resend = getResend();
   if (!resend) return; // Email désactivé si pas de clé Resend
 
-  await resend.emails.send({
-    from: FROM,
-    to: recipientEmail,
-    subject,
-    html: body,
-    attachments: [
-      {
-        filename: `${devis.numero}.pdf`,
-        content: pdfBuffer,
-      },
-    ],
-  });
+  try {
+    const { data, error } = await resend.emails.send({
+      from: FROM,
+      to: recipientEmail,
+      subject,
+      html: body,
+      attachments: [
+        {
+          filename: `${devis.numero}.pdf`,
+          content: pdfBuffer,
+        },
+      ],
+    });
+    if (error) {
+      console.error('[email] Resend a refusé l\'envoi:', JSON.stringify(error));
+    } else {
+      console.log(`[email] envoyé à ${recipientEmail} (id=${data?.id}) pour devis ${devis.numero}`);
+    }
+  } catch (err) {
+    // Non-bloquant : on log mais on ne fait pas planter la livraison du PDF
+    console.error('[email] sendDevisEmail exception:', err);
+  }
 }
 
 function artisanEmailHtml(devis: Devis, artisan: Artisan): string {
