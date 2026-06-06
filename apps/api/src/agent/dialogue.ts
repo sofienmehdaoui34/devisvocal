@@ -162,48 +162,59 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
     }
   }
 
-  switch (state) {
-    case 'NEW':
-      await handleNew(msg.from, session.id, channel, artisan);
-      break;
+  try {
+    switch (state) {
+      case 'NEW':
+        await handleNew(msg.from, session.id, channel, artisan);
+        break;
 
 
-    case 'MODE_CHOICE':
-      await handleModeChoice(msg.from, session.id, ctx, text, channel);
-      break;
+      case 'MODE_CHOICE':
+        await handleModeChoice(msg.from, session.id, ctx, text, channel);
+        break;
 
-    case 'RAPIDE_COLLECTING':
-      await handleRapideCollecting(msg.from, artisan, session.id, ctx, text, channel);
-      break;
+      case 'RAPIDE_COLLECTING':
+        await handleRapideCollecting(msg.from, artisan, session.id, ctx, text, channel);
+        break;
 
-    case 'ASSISTE_COLLECTING':
-    case 'COLLECTING': // legacy
-      await handleAssisteCollecting(msg.from, artisan, session.id, ctx, text, channel);
-      break;
+      case 'ASSISTE_COLLECTING':
+      case 'COLLECTING': // legacy
+        await handleAssisteCollecting(msg.from, artisan, session.id, ctx, text, channel);
+        break;
 
-    case 'CLARIFYING':
-      await handleClarifying(msg.from, artisan, session.id, ctx, text, channel);
-      break;
+      case 'CLARIFYING':
+        await handleClarifying(msg.from, artisan, session.id, ctx, text, channel);
+        break;
 
-    case 'RECAP_SENT':
-      await handleRecapResponse(msg.from, artisan, session.id, ctx, text, channel);
-      break;
+      case 'RECAP_SENT':
+        await handleRecapResponse(msg.from, artisan, session.id, ctx, text, channel);
+        break;
 
-    case 'AWAITING_PAYMENT': {
-      // N'importe quel message = nouveau devis
-      await completeAllUserSessions(msg.from);
-      const newSession = await createSession(msg.from, artisan.id);
-      await handleNew(msg.from, newSession.id, channel, artisan);
-      break;
+      case 'AWAITING_PAYMENT': {
+        // N'importe quel message = nouveau devis
+        await completeAllUserSessions(msg.from);
+        const newSession = await createSession(msg.from, artisan.id);
+        await handleNew(msg.from, newSession.id, channel, artisan);
+        break;
+      }
+
+      case 'COMPLETED':
+      case 'ONBOARDING': // legacy
+      default: {
+        await completeAllUserSessions(msg.from);
+        const newSession = await createSession(msg.from, artisan.id);
+        await handleNew(msg.from, newSession.id, channel);
+        break;
+      }
     }
-
-    case 'COMPLETED':
-    case 'ONBOARDING': // legacy
-    default: {
-      await completeAllUserSessions(msg.from);
-      const newSession = await createSession(msg.from, artisan.id);
-      await handleNew(msg.from, newSession.id, channel);
-      break;
+  } catch (err) {
+    // Sans ce filet, une exception (génération devis, Supabase, Twilio…) laissait
+    // l'utilisateur sans aucune réponse. On logge ET on prévient l'utilisateur.
+    console.error(`[dialogue] erreur état ${state} pour ${msg.from}:`, err);
+    try {
+      await channel.sendText(msg.from, MSG.erreur_generique());
+    } catch (sendErr) {
+      console.error('[dialogue] impossible d’envoyer le message d’erreur:', sendErr);
     }
   }
 }
