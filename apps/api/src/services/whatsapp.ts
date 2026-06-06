@@ -17,6 +17,33 @@ function toWA(number: string): string {
 
 // ─── Envoi texte ──────────────────────────────────────────────────────────────
 
+// WhatsApp/Twilio limite un message à 1600 caractères (erreur 21617).
+// On reste sous une marge de sécurité.
+const MAX_LEN = 1500;
+
+// Découpe un texte en morceaux ≤ MAX_LEN, en privilégiant les sauts de ligne.
+function splitMessage(text: string, max = MAX_LEN): string[] {
+  if (text.length <= max) return [text];
+  const chunks: string[] = [];
+  let current = '';
+  for (const line of text.split('\n')) {
+    // Ligne unique trop longue → on la coupe brutalement.
+    if (line.length > max) {
+      if (current) { chunks.push(current); current = ''; }
+      for (let i = 0; i < line.length; i += max) chunks.push(line.slice(i, i + max));
+      continue;
+    }
+    if ((current ? current.length + 1 : 0) + line.length > max) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = current ? `${current}\n${line}` : line;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export async function sendText(to: string, text: string): Promise<void> {
   const sid   = SID();
   const token = TOKEN();
@@ -28,22 +55,25 @@ export async function sendText(to: string, text: string): Promise<void> {
   }
 
   const toAddr = toWA(to);
-  console.log(`[whatsapp] sendText → ${toAddr} (from: ${from})`);
+  const parts = splitMessage(text);
+  console.log(`[whatsapp] sendText → ${toAddr} (from: ${from})${parts.length > 1 ? ` [${parts.length} parties]` : ''}`);
 
-  try {
-    const body = new URLSearchParams({ From: from, To: toAddr, Body: text });
-    const res = await axios.post(msgsUrl(), body.toString(), {
-      auth: { username: sid, password: token },
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-    console.log(`[whatsapp] message envoyé SID=${res.data?.sid} status=${res.data?.status}`);
-  } catch (err: unknown) {
-    if (axios.isAxiosError(err)) {
-      console.error('[whatsapp] Twilio API error:', err.response?.status, JSON.stringify(err.response?.data));
-    } else {
-      console.error('[whatsapp] sendText error:', err);
+  for (const part of parts) {
+    try {
+      const body = new URLSearchParams({ From: from, To: toAddr, Body: part });
+      const res = await axios.post(msgsUrl(), body.toString(), {
+        auth: { username: sid, password: token },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      console.log(`[whatsapp] message envoyé SID=${res.data?.sid} status=${res.data?.status}`);
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        console.error('[whatsapp] Twilio API error:', err.response?.status, JSON.stringify(err.response?.data));
+      } else {
+        console.error('[whatsapp] sendText error:', err);
+      }
+      throw err;
     }
-    throw err;
   }
 }
 
