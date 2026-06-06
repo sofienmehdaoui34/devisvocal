@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import type { Devis, Artisan } from '@devisvocal/types';
+import { safeError } from '../utils/errors.js';
 
 // Lazy init — retourne null si la clé n'est pas configurée
 let _resend: Resend | null = null;
@@ -57,7 +58,7 @@ export async function sendDevisEmail(params: {
     }
   } catch (err) {
     // Non-bloquant : on log mais on ne fait pas planter la livraison du PDF
-    console.error('[email] sendDevisEmail exception:', err);
+    console.error('[email] sendDevisEmail exception:', safeError(err));
   }
 }
 

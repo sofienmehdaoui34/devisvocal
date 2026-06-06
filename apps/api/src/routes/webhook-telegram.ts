@@ -3,6 +3,7 @@ import type { WhatsAppInboundMessage } from '@devisvocal/types';
 import type { Channel } from '../services/channel.js';
 import { handleInboundMessage } from '../agent/dialogue.js';
 import * as telegram from '../services/telegram.js';
+import { safeError } from '../utils/errors.js';
 
 const telegramChannel: Channel = {
   sendText: telegram.sendText,
@@ -38,10 +39,10 @@ router.post('/', async (req: Request, res: Response) => {
     };
 
     handleInboundMessage(inbound, telegramChannel).catch((err) => {
-      console.error(`[telegram-webhook] error for chat ${chatId}:`, err);
+      console.error(`[telegram-webhook] error for chat ${chatId}:`, safeError(err));
     });
   } catch (err) {
-    console.error('[telegram-webhook] parse error:', err);
+    console.error('[telegram-webhook] parse error:', safeError(err));
   }
 });
 

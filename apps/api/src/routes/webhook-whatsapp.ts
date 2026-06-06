@@ -3,6 +3,7 @@ import express from 'express';
 import type { WhatsAppInboundMessage } from '@devisvocal/types';
 import { handleInboundMessage } from '../agent/dialogue.js';
 import { whatsappChannel } from '../services/whatsapp.js';
+import { safeError } from '../utils/errors.js';
 
 const router = Router();
 
@@ -44,10 +45,10 @@ router.post('/', express.urlencoded({ extended: false }), async (req: Request, r
     };
 
     handleInboundMessage(inbound, whatsappChannel).catch((err) => {
-      console.error(`[whatsapp-webhook] error for ${from}:`, err);
+      console.error(`[whatsapp-webhook] error for ${from}:`, safeError(err));
     });
   } catch (err) {
-    console.error('[whatsapp-webhook] parse error:', err);
+    console.error('[whatsapp-webhook] parse error:', safeError(err));
   }
 });
 

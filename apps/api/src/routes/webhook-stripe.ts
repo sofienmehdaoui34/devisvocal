@@ -4,6 +4,7 @@ import { constructWebhookEvent } from '../services/stripe.js';
 import { handlePaymentSuccess } from '../agent/dialogue.js';
 import * as telegram from '../services/telegram.js';
 import * as whatsapp from '../services/whatsapp.js';
+import { safeError } from '../utils/errors.js';
 
 const router = Router();
 
@@ -36,7 +37,7 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     event = await constructWebhookEvent(req.body as Buffer, sig);
   } catch (err) {
-    console.error('[stripe-webhook] signature verification failed:', err);
+    console.error('[stripe-webhook] signature verification failed:', safeError(err));
     res.status(400).send(`Webhook Error: ${(err as Error).message}`);
     return;
   }
@@ -59,7 +60,7 @@ router.post('/', async (req: Request, res: Response) => {
       }
     }
   } catch (err) {
-    console.error('[stripe-webhook] handler error:', err);
+    console.error('[stripe-webhook] handler error:', safeError(err));
   }
 });
 

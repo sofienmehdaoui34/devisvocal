@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { getDevisByToken, getArtisanById, updateArtisan } from '../services/supabase.js';
 import { createCheckoutSession } from '../services/stripe.js';
+import { safeError } from '../utils/errors.js';
 
 const router = Router();
 
@@ -124,7 +125,7 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     });
     res.json({ url });
   } catch (err) {
-    console.error('[pay] Stripe error:', err);
+    console.error('[pay] Stripe error:', safeError(err));
     res.status(500).json({ error: 'Erreur paiement. Réessayez.' });
   }
 });

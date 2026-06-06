@@ -25,6 +25,7 @@ import {
 import { createCheckoutSession } from '../services/stripe.js';
 import { sendDevisEmail } from '../services/email.js';
 import { generateDevisToken } from '../utils/token.js';
+import { safeError } from '../utils/errors.js';
 import { generateDevisPdf } from '@devisvocal/pdf';
 
 const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
@@ -121,7 +122,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
       const buffer   = await channel.downloadMedia(mediaUrl);
       text = await transcribeAudioBuffer(buffer, msg.audio_mime);
     } catch (err) {
-      console.error('[audio] transcription error:', err);
+      console.error('[audio] transcription error:', safeError(err));
       await sendText(msg.from, `Désolé, je n'ai pas pu transcrire votre message vocal 😕\nPouvez-vous écrire votre description en texte ?`);
       return;
     }
@@ -210,7 +211,7 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
   } catch (err) {
     // Sans ce filet, une exception (génération devis, Supabase, Twilio…) laissait
     // l'utilisateur sans aucune réponse. On logge ET on prévient l'utilisateur.
-    console.error(`[dialogue] erreur état ${state} pour ${msg.from}:`, err);
+    console.error(`[dialogue] erreur état ${state} pour ${msg.from}:`, safeError(err));
     try {
       await channel.sendText(msg.from, MSG.erreur_generique());
     } catch (sendErr) {
@@ -331,7 +332,7 @@ async function handleRapideCollecting(
       await updateSession(sessionId, 'RECAP_SENT', ctx);
       await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant }));
     } catch (err) {
-      console.error('[rapide] split error', err);
+      console.error('[rapide] split error', safeError(err));
       await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
       await channel.sendText(from, `Désolé, je n'ai pas pu analyser ça. Réessayons — décrivez les travaux :`);
     }
@@ -372,7 +373,7 @@ async function handleAssisteCollecting(
     await updateSession(sessionId, 'RECAP_SENT', ctx);
     await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva }));
   } catch (err) {
-    console.error('[assiste] extraction error', err);
+    console.error('[assiste] extraction error', safeError(err));
     await updateSession(sessionId, 'ASSISTE_COLLECTING', ctx);
     await channel.sendText(from, `Je n'ai pas bien compris. Pouvez-vous reformuler la description des travaux ?`);
   }
@@ -413,7 +414,7 @@ async function handleClarifying(
     await updateSession(sessionId, 'RECAP_SENT', ctx);
     await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva }));
   } catch (err) {
-    console.error('[clarifying] error', err);
+    console.error('[clarifying] error', safeError(err));
     await updateSession(sessionId, 'RECAP_SENT', ctx);
     await channel.sendText(from, `Je génère le devis avec les informations disponibles.\n\n${MSG.attente_extraction()}`);
   }
@@ -613,6 +614,6 @@ export async function handlePaymentSuccess(
 
     await channel.sendText(artisan.whatsapp_number, MSG.devis_envoye(devis.numero));
   } catch (err) {
-    console.error(`[payment] livraison PDF échouée pour ${devis.numero} (devis déjà payé) :`, err);
+    console.error(`[payment] livraison PDF échouée pour ${devis.numero} (devis déjà payé) :`, safeError(err));
   }
 }

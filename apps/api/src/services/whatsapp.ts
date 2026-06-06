@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { Channel } from './channel.js';
+import { safeError } from '../utils/errors.js';
 
 // ─── Helpers Twilio ───────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ export async function sendText(to: string, text: string): Promise<void> {
       if (axios.isAxiosError(err)) {
         console.error('[whatsapp] Twilio API error:', err.response?.status, JSON.stringify(err.response?.data));
       } else {
-        console.error('[whatsapp] sendText error:', err);
+        console.error('[whatsapp] sendText error:', safeError(err));
       }
       throw err;
     }
@@ -109,7 +110,7 @@ export async function sendDocument(
     if (axios.isAxiosError(err)) {
       console.error('[whatsapp] Twilio sendDocument error:', err.response?.status, JSON.stringify(err.response?.data));
     } else {
-      console.error('[whatsapp] sendDocument error:', err);
+      console.error('[whatsapp] sendDocument error:', safeError(err));
     }
     throw err;
   }
