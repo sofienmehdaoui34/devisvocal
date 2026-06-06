@@ -145,26 +145,19 @@ export function buildRecapMessage(
   const devise = opts.devise ?? 'CHF';
   const tvaPct = opts.tvaPct ?? 8.1;
   const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes, tvaPct);
+  // Format compact : pas de devise ni "HT" par ligne (affichés dans le total),
+  // pour tenir en un seul message WhatsApp et économiser le quota Twilio.
   const lignesText = extraction.lignes
-    .map((l) => `• ${l.description} — ${l.quantite} ${l.unite} × ${l.prix_unitaire.toFixed(0)} = ${l.total_ht.toFixed(0)} ${devise} HT`)
+    .map((l) => `• ${l.description} : ${l.quantite} ${l.unite} × ${l.prix_unitaire.toFixed(0)} = ${l.total_ht.toFixed(0)}`)
     .join('\n');
 
   const ttcDisplay = opts.montantTtcOriginal ?? montant_ttc;
 
-  return `📋 *Récap de votre devis*
+  return `📋 *Récap devis* — ${extraction.description_travaux}
+${extraction.client_nom ? `👤 ${extraction.client_nom}\n` : ''}${lignesText}
+💰 HT *${montant_ht.toFixed(0)}* · TVA ${tva}% *${(montant_ttc - montant_ht).toFixed(0)}* · TTC *${ttcDisplay.toFixed(2)} ${devise}*${extraction.notes ? `\n📝 ${extraction.notes}` : ''}
 
-🔨 ${extraction.description_travaux}
-${extraction.client_nom ? `👤 Client : ${extraction.client_nom}\n` : ''}
-*Détail des postes :*
-${lignesText}
-
-💰 Total HT : *${montant_ht.toFixed(2)} ${devise}*
-💰 TVA ${tva}% : *${(montant_ttc - montant_ht).toFixed(2)} ${devise}*
-💰 Total TTC : *${ttcDisplay.toFixed(2)} ${devise}*
-${extraction.notes ? `\n📝 ${extraction.notes}` : ''}
-
-✅ Tapez *OUI* pour générer le devis et obtenir le lien
-✏️ Tapez *NON* pour recommencer`;
+✅ *OUI* = générer le lien · ✏️ *NON* = recommencer`;
 }
 
 export function buildQuestionsMessage(questions: string[]): string {
