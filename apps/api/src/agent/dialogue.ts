@@ -30,6 +30,16 @@ import { generateDevisPdf } from '@devisvocal/pdf';
 const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
 const MAX_CLARIFICATION_ROUNDS = 2;
 
+// Construit le bon canal (WhatsApp si numéro E.164 avec "+", Telegram sinon)
+async function channelFromNumber(number: string): Promise<Channel> {
+  if (number.startsWith('+')) {
+    const w = await import('../services/whatsapp.js');
+    return { sendText: w.sendText, sendDocument: w.sendDocument, getMediaUrl: w.getMediaUrl, downloadMedia: w.downloadMedia };
+  }
+  const t = await import('../services/telegram.js');
+  return { sendText: t.sendText, sendDocument: t.sendDocument, getMediaUrl: t.getMediaUrl, downloadMedia: t.downloadMedia };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseCtx(raw: unknown): SessionContext {
@@ -546,7 +556,7 @@ async function createDevisAndSendLink(
 export async function handlePaymentSuccess(
   stripeSessionId: string,
   _paymentIntentId: string,
-  channel: Channel
+  _channel: Channel
 ): Promise<void> {
   const { getArtisanById, updateDevisStatut, savePaiement, getDevisByToken } = await import('../services/supabase.js');
   const { getCheckoutSession } = await import('../services/stripe.js');
@@ -561,27 +571,37 @@ export async function handlePaymentSuccess(
   const artisan = await getArtisanById(devis.artisan_id);
   if (!artisan) throw new Error(`Artisan non trouvé ${devis.artisan_id}`);
 
+  // 1) Enregistre le paiement et marque le devis 'payé' IMMÉDIATEMENT.
+  //    Ainsi la page web débloque le devis dès le retour, même si la
+  //    génération PDF / l'envoi échoue ensuite (Puppeteer fragile sur Render).
   await savePaiement(devis.id, _paymentIntentId, devis.montant_ttc);
-
-  const pdfBuffer = await generateDevisPdf(devis, artisan);
-  const pdfUrl = await uploadPdf(devis.id, pdfBuffer);
-
-  await updateDevisStatut(devis.id, 'payé', { pdf_url: pdfUrl, paid_at: new Date().toISOString() });
+  await updateDevisStatut(devis.id, 'payé', { paid_at: new Date().toISOString() });
   await incrementDevisCount(artisan.id);
+  console.log(`[payment] devis ${devis.numero} marqué payé`);
 
-  await channel.sendDocument(artisan.whatsapp_number, pdfUrl, `${devis.numero}.pdf`, `Votre devis ${devis.numero} est prêt !`);
+  // 2) Génération PDF + livraison : best-effort, ne doit JAMAIS rejeter
+  //    (sinon le webhook Stripe renverra une erreur et rejouera l'event).
+  try {
+    const channel = await channelFromNumber(artisan.whatsapp_number);
+    const pdfBuffer = await generateDevisPdf(devis, artisan);
+    const pdfUrl = await uploadPdf(devis.id, pdfBuffer);
 
-  if (artisan.email) {
-    await sendDevisEmail({ devis, artisan, pdfBuffer, recipientEmail: artisan.email, isArtisan: true });
+    await updateDevisStatut(devis.id, 'envoyé', { pdf_url: pdfUrl, delivered_at: new Date().toISOString() });
+
+    await channel.sendDocument(artisan.whatsapp_number, pdfUrl, `${devis.numero}.pdf`, `Votre devis ${devis.numero} est prêt !`);
+
+    if (artisan.email) {
+      await sendDevisEmail({ devis, artisan, pdfBuffer, recipientEmail: artisan.email, isArtisan: true });
+    }
+    if (devis.client_email) {
+      await sendDevisEmail({ devis, artisan, pdfBuffer, recipientEmail: devis.client_email, isArtisan: false });
+    }
+
+    const session = await getActiveSession(artisan.whatsapp_number);
+    if (session) await completeSession(session.id);
+
+    await channel.sendText(artisan.whatsapp_number, MSG.devis_envoye(devis.numero));
+  } catch (err) {
+    console.error(`[payment] livraison PDF échouée pour ${devis.numero} (devis déjà payé) :`, err);
   }
-  if (devis.client_email) {
-    await sendDevisEmail({ devis, artisan, pdfBuffer, recipientEmail: devis.client_email, isArtisan: false });
-  }
-
-  await updateDevisStatut(devis.id, 'envoyé', { delivered_at: new Date().toISOString() });
-
-  const session = await getActiveSession(artisan.whatsapp_number);
-  if (session) await completeSession(session.id);
-
-  await channel.sendText(artisan.whatsapp_number, MSG.devis_envoye(devis.numero));
 }
