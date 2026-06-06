@@ -15,14 +15,18 @@ export default function DevisPage() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  // Infos client (email pour recevoir le PDF)
+  // Infos client (figurent sur le devis)
+  const [clientNom, setClientNom] = useState('');
+  const [clientAdresse, setClientAdresse] = useState('');
   const [clientEmail, setClientEmail] = useState('');
+  const [clientTel, setClientTel] = useState('');
 
-  // Infos artisan (collectées si manquantes)
+  // Infos prestataire (auto-remplies depuis le profil sauvegardé)
   const [artisanNom, setArtisanNom] = useState('');
   const [artisanEmail, setArtisanEmail] = useState('');
   const [artisanTel, setArtisanTel] = useState('');
   const [artisanAdresse, setArtisanAdresse] = useState('');
+  const [artisanSiret, setArtisanSiret] = useState('');
 
   useEffect(() => {
     fetch(`${API_URL}/api/devis/${token}`)
@@ -33,29 +37,47 @@ export default function DevisPage() {
         } else {
           setDevis(data.devis);
           setArtisan(data.artisan);
+          // Pré-remplir les infos client déjà connues
+          setClientNom(data.devis.client_nom ?? '');
           setClientEmail(data.devis.client_email ?? '');
-          // Pré-remplir ce qu'on a déjà
+          setClientAdresse(data.devis.client_adresse ?? '');
+          setClientTel(data.devis.client_telephone ?? '');
+          // Auto-remplir le profil prestataire depuis ce qui est sauvegardé
           setArtisanNom(data.artisan?.nom_entreprise ?? '');
           setArtisanEmail(data.artisan?.email ?? '');
+          setArtisanTel(data.artisan?.telephone ?? '');
+          setArtisanAdresse(data.artisan?.adresse ?? '');
+          setArtisanSiret(data.artisan?.siret ?? '');
         }
       })
       .catch(() => setError('Impossible de charger le devis.'));
   }, [token]);
 
-  // Profil artisan incomplet ?
-  const profileIncomplet = artisan && (!artisan.nom_entreprise || !artisan.email);
+  // Champs indispensables d'un devis : prestataire + nom du client
+  const champsManquants =
+    !artisanNom.trim() ? 'le nom de votre entreprise' :
+    !clientNom.trim()  ? 'le nom du client' :
+    null;
 
   const handlePay = () => {
+    if (champsManquants) {
+      setError(null);
+      return; // le bouton est déjà désactivé, garde-fou
+    }
     startTransition(async () => {
       const res = await fetch(`${API_URL}/api/devis/${token}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          client_nom: clientNom || undefined,
           client_email: clientEmail || undefined,
+          client_adresse: clientAdresse || undefined,
+          client_telephone: clientTel || undefined,
           artisan_nom_entreprise: artisanNom || undefined,
           artisan_email: artisanEmail || undefined,
           artisan_telephone: artisanTel || undefined,
           artisan_adresse: artisanAdresse || undefined,
+          artisan_siret: artisanSiret || undefined,
         }),
       });
       const data = await res.json() as { url?: string; error?: string };
@@ -238,78 +260,129 @@ export default function DevisPage() {
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
             <h2 className="font-bold text-gray-900 text-lg">Télécharger le PDF — 2.90 CHF</h2>
 
-            {/* Profil artisan — affiché seulement si incomplet */}
-            {profileIncomplet && (
-              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-3">
-                <p className="text-sm font-semibold text-blue-800">
-                  Complétez votre profil — apparaîtra sur tous vos PDFs
-                </p>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Nom / Entreprise <span className="text-blue-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={artisanNom}
-                      onChange={(e) => setArtisanNom(e.target.value)}
-                      placeholder="Plomberie Dupont"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Email pro</label>
-                    <input
-                      type="email"
-                      value={artisanEmail}
-                      onChange={(e) => setArtisanEmail(e.target.value)}
-                      placeholder="contact@plomberie-dupont.ch"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Téléphone</label>
-                    <input
-                      type="tel"
-                      value={artisanTel}
-                      onChange={(e) => setArtisanTel(e.target.value)}
-                      placeholder="+41 79 123 45 67"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Adresse</label>
-                    <input
-                      type="text"
-                      value={artisanAdresse}
-                      onChange={(e) => setArtisanAdresse(e.target.value)}
-                      placeholder="Rue des Artisans 12, 1201 Genève"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-                    />
-                  </div>
+            {/* ── Prestataire — auto-rempli depuis le profil sauvegardé ── */}
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-semibold text-blue-800">
+                🏢 Vos informations (prestataire) — apparaissent sur le PDF
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Nom / Entreprise <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={artisanNom}
+                    onChange={(e) => setArtisanNom(e.target.value)}
+                    placeholder="Plomberie Dupont"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Email pro</label>
+                  <input
+                    type="email"
+                    value={artisanEmail}
+                    onChange={(e) => setArtisanEmail(e.target.value)}
+                    placeholder="contact@plomberie-dupont.ch"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Téléphone</label>
+                  <input
+                    type="tel"
+                    value={artisanTel}
+                    onChange={(e) => setArtisanTel(e.target.value)}
+                    placeholder="+41 79 123 45 67"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Adresse</label>
+                  <input
+                    type="text"
+                    value={artisanAdresse}
+                    onChange={(e) => setArtisanAdresse(e.target.value)}
+                    placeholder="Rue des Artisans 12, 1201 Genève"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">N° IDE / TVA (optionnel)</label>
+                  <input
+                    type="text"
+                    value={artisanSiret}
+                    onChange={(e) => setArtisanSiret(e.target.value)}
+                    placeholder="CHE-123.456.789"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
                 </div>
               </div>
-            )}
-
-            {/* Email client */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Email de votre client pour recevoir le PDF (optionnel)
-              </label>
-              <input
-                type="email"
-                value={clientEmail}
-                onChange={(e) => setClientEmail(e.target.value)}
-                placeholder="client@exemple.com"
-                className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-              />
+              <p className="text-xs text-blue-600">Enregistré sur votre profil — pré-rempli au prochain devis.</p>
             </div>
+
+            {/* ── Client — coordonnées du destinataire du devis ── */}
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-semibold text-gray-800">👤 Informations du client</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Nom du client <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={clientNom}
+                    onChange={(e) => setClientNom(e.target.value)}
+                    placeholder="M. Martin / Société X"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Téléphone</label>
+                  <input
+                    type="tel"
+                    value={clientTel}
+                    onChange={(e) => setClientTel(e.target.value)}
+                    placeholder="+41 78 000 00 00"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Adresse du client</label>
+                  <input
+                    type="text"
+                    value={clientAdresse}
+                    onChange={(e) => setClientAdresse(e.target.value)}
+                    placeholder="Rue du Lac 5, 1207 Genève"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Email du client (pour recevoir le PDF)
+                  </label>
+                  <input
+                    type="email"
+                    value={clientEmail}
+                    onChange={(e) => setClientEmail(e.target.value)}
+                    placeholder="client@exemple.com"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {champsManquants && (
+              <p className="text-sm text-amber-600 text-center">
+                Merci de renseigner {champsManquants} avant de continuer.
+              </p>
+            )}
 
             <button
               onClick={handlePay}
-              disabled={isPending}
-              className="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+              disabled={isPending || !!champsManquants}
+              className="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isPending ? (
                 <>

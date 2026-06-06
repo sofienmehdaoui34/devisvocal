@@ -76,6 +76,7 @@ export interface Artisan {
   nom_entreprise?: string;
   siret?: string;
   adresse?: string;
+  telephone?: string;
   activite?: string;
   metier?: Metier;
   email?: string;
@@ -122,6 +123,8 @@ export interface Devis {
   token: string;
   client_nom?: string;
   client_email?: string;
+  client_adresse?: string;
+  client_telephone?: string;
   travaux_description?: string;
   lignes_json: LigneDevis[];
   montant_ht: number;

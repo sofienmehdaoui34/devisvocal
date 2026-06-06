@@ -44,7 +44,10 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
   const artisan = await getArtisanById(devis.artisan_id);
 
   const {
+    client_nom,
     client_email,
+    client_adresse,
+    client_telephone,
     artisan_nom_entreprise,
     artisan_prenom,
     artisan_email,
@@ -52,7 +55,10 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     artisan_adresse,
     artisan_siret,
   } = req.body as {
+    client_nom?: string;
     client_email?: string;
+    client_adresse?: string;
+    client_telephone?: string;
     artisan_nom_entreprise?: string;
     artisan_prenom?: string;
     artisan_email?: string;
@@ -61,22 +67,45 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     artisan_siret?: string;
   };
 
-  // Sauvegarder les infos artisan (profil) si fournies
-  if (artisan && (artisan_nom_entreprise || artisan_email || artisan_prenom)) {
+  const clean = (v?: string) => {
+    const t = v?.trim();
+    return t ? t : undefined;
+  };
+
+  // ─── Sauvegarde profil artisan (écrase avec ce qui est fourni) ──────────────
+  // Non-bloquant : une erreur (ex. colonne absente) ne doit pas casser le paiement.
+  if (artisan) {
     const patch: Record<string, string> = {};
-    if (artisan_nom_entreprise && !artisan.nom_entreprise) patch.nom_entreprise = artisan_nom_entreprise;
-    if (artisan_email && !artisan.email)                  patch.email = artisan_email;
-    if (artisan_adresse && !artisan.adresse)              patch.adresse = artisan_adresse;
-    if (artisan_siret && !artisan.siret)                  patch.siret = artisan_siret;
-    // prénom stocké dans nom_entreprise si pas de nom entreprise
-    if (artisan_prenom && !artisan.nom_entreprise)        patch.nom_entreprise = artisan_prenom;
-    if (Object.keys(patch).length > 0) await updateArtisan(artisan.id, patch);
+    const nom = clean(artisan_nom_entreprise) ?? clean(artisan_prenom);
+    if (nom)                          patch.nom_entreprise = nom;
+    if (clean(artisan_email))         patch.email = clean(artisan_email)!;
+    if (clean(artisan_adresse))       patch.adresse = clean(artisan_adresse)!;
+    if (clean(artisan_telephone))     patch.telephone = clean(artisan_telephone)!;
+    if (clean(artisan_siret))         patch.siret = clean(artisan_siret)!;
+    if (Object.keys(patch).length > 0) {
+      try {
+        await updateArtisan(artisan.id, patch);
+        console.log(`[pay] profil artisan ${artisan.id} mis à jour:`, Object.keys(patch).join(', '));
+      } catch (e) {
+        console.error('[pay] échec sauvegarde artisan (non-bloquant):', e);
+      }
+    }
   }
 
-  // Sauvegarder l'email client sur le devis si fourni
-  if (client_email) {
+  // ─── Sauvegarde infos client sur le devis (non-bloquant) ────────────────────
+  const devisPatch: Record<string, string> = {};
+  if (clean(client_nom))        devisPatch.client_nom = clean(client_nom)!;
+  if (clean(client_email))      devisPatch.client_email = clean(client_email)!;
+  if (clean(client_adresse))    devisPatch.client_adresse = clean(client_adresse)!;
+  if (clean(client_telephone))  devisPatch.client_telephone = clean(client_telephone)!;
+  if (Object.keys(devisPatch).length > 0) {
     const { updateDevisStatut } = await import('../services/supabase.js');
-    await updateDevisStatut(devis.id, devis.statut, { client_email });
+    try {
+      await updateDevisStatut(devis.id, devis.statut, devisPatch);
+      console.log(`[pay] infos client devis ${devis.id} sauvées:`, Object.keys(devisPatch).join(', '));
+    } catch (e) {
+      console.error('[pay] échec sauvegarde client (non-bloquant):', e);
+    }
   }
 
   // Si pas de clé Stripe → mode dev, on simule un lien direct
