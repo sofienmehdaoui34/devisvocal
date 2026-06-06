@@ -157,42 +157,75 @@ export default function DevisPage() {
             </div>
           )}
 
-          {/* Lignes */}
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  <th className="px-6 py-3 text-left">Description</th>
-                  <th className="px-4 py-3 text-center">Qté</th>
-                  <th className="px-4 py-3 text-center">Unité</th>
-                  <th className="px-4 py-3 text-right">PU HT</th>
-                  <th className="px-6 py-3 text-right">Total HT</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {devis.lignes_json.map((ligne, i) => (
-                  <tr key={i} className="hover:bg-gray-50/50">
-                    <td className="px-6 py-4 text-gray-900">{ligne.description}</td>
-                    <td className="px-4 py-4 text-center text-gray-600">{ligne.quantite}</td>
-                    <td className="px-4 py-4 text-center text-gray-600">{ligne.unite}</td>
-                    <td className="px-4 py-4 text-right text-gray-600">{fmt(ligne.prix_unitaire)}</td>
-                    <td className="px-6 py-4 text-right font-semibold text-gray-900">{fmt(ligne.total_ht)}</td>
+          {/* Lignes — floutées tant que le devis n'est pas payé */}
+          <div className="relative">
+            <div
+              className={`overflow-x-auto transition ${
+                !isPaid ? 'blur-sm select-none pointer-events-none' : ''
+              }`}
+              aria-hidden={!isPaid}
+            >
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    <th className="px-6 py-3 text-left">Description</th>
+                    <th className="px-4 py-3 text-center">Qté</th>
+                    <th className="px-4 py-3 text-center">Unité</th>
+                    <th className="px-4 py-3 text-right">PU HT</th>
+                    <th className="px-6 py-3 text-right">Total HT</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {devis.lignes_json.map((ligne, i) => (
+                    <tr key={i} className="hover:bg-gray-50/50">
+                      <td className="px-6 py-4 text-gray-900">{ligne.description}</td>
+                      <td className="px-4 py-4 text-center text-gray-600">{ligne.quantite}</td>
+                      <td className="px-4 py-4 text-center text-gray-600">{ligne.unite}</td>
+                      <td className="px-4 py-4 text-right text-gray-600">{fmt(ligne.prix_unitaire)}</td>
+                      <td className="px-6 py-4 text-right font-semibold text-gray-900">{fmt(ligne.total_ht)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Overlay cadenas — masque le détail tant que !isPaid */}
+            {!isPaid && (
+              <div className="absolute inset-0 flex items-center justify-center bg-white/30">
+                <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-6 py-5 text-center max-w-xs mx-4">
+                  <div className="text-3xl mb-2">🔒</div>
+                  <p className="font-bold text-gray-900">Détail du devis verrouillé</p>
+                  <p className="text-gray-500 text-sm mt-1">
+                    {devis.lignes_json.length} poste{devis.lignes_json.length > 1 ? 's' : ''} · Total
+                    visible ci-dessous
+                  </p>
+                  <p className="text-brand text-sm font-semibold mt-2">
+                    Payez 2.90 CHF pour débloquer le détail et le PDF
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Totaux */}
+          {/* Totaux — détail HT/TVA masqué tant que !isPaid, TTC toujours visible */}
           <div className="border-t border-gray-100 px-6 py-4 space-y-2">
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Sous-total HT</span>
-              <span>{fmt(devis.montant_ht)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>TVA {devis.tva}%</span>
-              <span>{fmt(Math.round(devis.montant_ht * devis.tva / 100 * 100) / 100)}</span>
-            </div>
+            {isPaid ? (
+              <>
+                <div className="flex justify-between text-sm text-gray-600">
+                  <span>Sous-total HT</span>
+                  <span>{fmt(devis.montant_ht)}</span>
+                </div>
+                <div className="flex justify-between text-sm text-gray-600">
+                  <span>TVA {devis.tva}%</span>
+                  <span>{fmt(Math.round(devis.montant_ht * devis.tva / 100 * 100) / 100)}</span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between text-sm text-gray-400 italic">
+                <span>Détail HT / TVA</span>
+                <span>🔒 après paiement</span>
+              </div>
+            )}
             <div className="flex justify-between font-bold text-lg text-gray-900 pt-2 border-t border-gray-100">
               <span>TOTAL TTC</span>
               <span className="text-brand">{fmt(devis.montant_ttc)}</span>
