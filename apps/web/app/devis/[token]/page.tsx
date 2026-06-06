@@ -53,17 +53,14 @@ export default function DevisPage() {
       .catch(() => setError('Impossible de charger le devis.'));
   }, [token]);
 
-  // Champs indispensables d'un devis : prestataire + nom du client
-  const champsManquants =
+  // Rappel non-bloquant : on suggère les champs essentiels d'un devis pro,
+  // mais on n'empêche JAMAIS le paiement (à la discrétion de l'artisan).
+  const champsConseilles =
     !artisanNom.trim() ? 'le nom de votre entreprise' :
     !clientNom.trim()  ? 'le nom du client' :
     null;
 
   const handlePay = () => {
-    if (champsManquants) {
-      setError(null);
-      return; // le bouton est déjà désactivé, garde-fou
-    }
     startTransition(async () => {
       const res = await fetch(`${API_URL}/api/devis/${token}/pay`, {
         method: 'POST',
@@ -373,15 +370,15 @@ export default function DevisPage() {
               </div>
             </div>
 
-            {champsManquants && (
+            {champsConseilles && (
               <p className="text-sm text-amber-600 text-center">
-                Merci de renseigner {champsManquants} avant de continuer.
+                💡 Conseil : renseignez {champsConseilles} pour un devis complet (facultatif).
               </p>
             )}
 
             <button
               onClick={handlePay}
-              disabled={isPending || !!champsManquants}
+              disabled={isPending}
               className="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isPending ? (

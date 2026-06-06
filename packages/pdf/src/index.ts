@@ -1,10 +1,18 @@
 import puppeteer from 'puppeteer';
 import type { Devis, Artisan, LigneDevis } from '@devisvocal/types';
 
-const fmt = (n: number) =>
-  `CHF ${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, "'")}`;
+// Devise dérivée du taux de TVA : 8.1% = Suisse (CHF), sinon Europe (EUR).
+const deviseFromTva = (tva: number): 'CHF' | 'EUR' => (tva >= 15 ? 'EUR' : 'CHF');
+
+const makeFmt = (devise: 'CHF' | 'EUR') => (n: number) => {
+  const sep = devise === 'CHF' ? "'" : ' '; // apostrophe CH / espace fine FR
+  return `${devise} ${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, sep)}`;
+};
 
 function buildHtml(devis: Devis, artisan: Artisan): string {
+  const devise = deviseFromTva(devis.tva);
+  const fmt = makeFmt(devise);
+  const ideLabel = devise === 'EUR' ? 'SIRET' : 'N° IDE';
   const dateEmission = new Date(devis.created_at).toLocaleDateString('fr-CH');
   const dateValidite = new Date(new Date(devis.created_at).getTime() + 30 * 86400000).toLocaleDateString('fr-CH');
 
@@ -66,6 +74,11 @@ function buildHtml(devis: Devis, artisan: Artisan): string {
   .totals-table .total-row td { border-top: 1px solid #e5e7eb; padding-top: 8px; font-weight: 700; font-size: 12px; color: #111827; }
   .notes { margin-top: 24px; }
   .notes-content { font-size: 10px; color: #4b5563; line-height: 1.5; background: #f9fafb; border-left: 3px solid #1a56db; padding: 10px 14px; border-radius: 2px; }
+  .signature { display: flex; justify-content: flex-end; margin-top: 32px; }
+  .sign-box { width: 260px; }
+  .sign-title { font-size: 9px; font-weight: 700; color: #6b7280; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+  .sign-hint { font-size: 9px; color: #9ca3af; margin-bottom: 28px; }
+  .sign-line { border-top: 1px solid #9ca3af; padding-top: 4px; font-size: 9px; color: #6b7280; }
   .footer { position: fixed; bottom: 24px; left: 40px; right: 40px; border-top: 1px solid #e5e7eb; padding-top: 10px; display: flex; justify-content: space-between; color: #9ca3af; font-size: 9px; }
 </style>
 </head>
@@ -75,9 +88,10 @@ function buildHtml(devis: Devis, artisan: Artisan): string {
   <div>
     <div class="company-name">${artisan.nom_entreprise ?? 'Mon Entreprise'}</div>
     <div class="company-info">
-      ${artisan.adresse ?? ''}<br>
-      ${artisan.email ?? ''}<br>
-      ${artisan.siret ? `SIRET : ${artisan.siret}` : ''}
+      ${artisan.adresse ? `${artisan.adresse}<br>` : ''}
+      ${artisan.telephone ? `Tél : ${artisan.telephone}<br>` : ''}
+      ${artisan.email ? `${artisan.email}<br>` : ''}
+      ${artisan.siret ? `${ideLabel} : ${artisan.siret}` : ''}
     </div>
   </div>
   <div class="devis-title">
@@ -94,12 +108,20 @@ function buildHtml(devis: Devis, artisan: Artisan): string {
   <div class="partie">
     <div class="partie-label">Prestataire</div>
     <div class="partie-name">${artisan.nom_entreprise ?? ''}</div>
-    <div class="partie-detail">${artisan.adresse ?? ''}</div>
+    <div class="partie-detail">
+      ${artisan.adresse ? `${artisan.adresse}<br>` : ''}
+      ${artisan.telephone ? `${artisan.telephone}<br>` : ''}
+      ${artisan.email ?? ''}
+    </div>
   </div>
   <div class="partie">
     <div class="partie-label">Client</div>
     <div class="partie-name">${devis.client_nom ?? 'À compléter'}</div>
-    <div class="partie-detail">${devis.client_email ?? ''}</div>
+    <div class="partie-detail">
+      ${devis.client_adresse ? `${devis.client_adresse}<br>` : ''}
+      ${devis.client_telephone ? `${devis.client_telephone}<br>` : ''}
+      ${devis.client_email ?? ''}
+    </div>
   </div>
 </div>
 
@@ -146,6 +168,14 @@ ${devis.travaux_description ? `
     Ce devis est valable 30 jours à compter de la date d'émission.
     Toute commande implique l'acceptation de ces conditions.
     Paiement à 30 jours fin de mois.
+  </div>
+</div>
+
+<div class="signature">
+  <div class="sign-box">
+    <div class="sign-title">Bon pour accord</div>
+    <div class="sign-hint">Date et signature du client</div>
+    <div class="sign-line">Le client (précédé de « Lu et approuvé »)</div>
   </div>
 </div>
 
