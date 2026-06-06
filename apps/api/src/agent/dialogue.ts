@@ -51,6 +51,27 @@ function getDevise(from: string): { devise: string; tva: number } {
   return { devise: 'CHF', tva: 8.1 }; // Suisse par défaut
 }
 
+// Détecte une demande explicite de changement de devise dans le chat.
+// Ex: "mets-le en CHF", "plutôt en euros", "en francs suisses", "facture en EUR".
+// Renvoie null si aucune intention claire (pour ne pas confondre avec "5000 CHF").
+function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number } | null {
+  const t = text.toLowerCase();
+  const hasChf = /\b(chf|francs?\s*suisses?|francs?\s*ch)\b/.test(t);
+  const hasEur = /(\beuros?\b|\beur\b|€)/.test(t);
+
+  // Signaux d'intention : préposition "en <devise>", verbe de bascule, ou message ne contenant QUE la devise.
+  const enDevise   = /\ben\s+(chf|francs?(\s*suisses?)?|euros?|eur|€)\b/.test(t);
+  const switchVerb = /\b(met|mets|mettre|passe|passer|change|changer|facture|facturer|convertis|convertir|bascule|basculer|plut[oô]t)\b/.test(t);
+  const onlyDevise = /^\s*(en\s+)?(chf|francs?(\s*suisses?)?|euros?|eur|€)\s*[.!]*\s*$/.test(t);
+
+  const intention = enDevise || onlyDevise || (switchVerb && (hasChf || hasEur));
+  if (!intention) return null;
+
+  if (hasEur && !hasChf) return { devise: 'EUR', tva: 20 };
+  if (hasChf && !hasEur) return { devise: 'CHF', tva: 8.1 };
+  return null; // ambigu (les deux mentionnés) → on ne devine pas
+}
+
 // Détection du métier depuis la description des travaux
 import type { Metier } from '@devisvocal/types';
 function inferMetier(description: string): Metier | null {
@@ -108,6 +129,27 @@ export async function handleInboundMessage(msg: WhatsAppInboundMessage, channel:
     await updateSession(newSession.id, 'MODE_CHOICE', {});
     await sendText(msg.from, MSG.mode_choice());
     return;
+  }
+
+  // Changement de devise demandé dans le chat (ex. frontalier facturant en CHF).
+  // On met à jour le contexte ; il sera propagé aux calculs/recap suivants.
+  if (text && state !== 'NEW') {
+    const intent = detectDeviseIntent(text);
+    if (intent && intent.devise !== ctx.devise) {
+      ctx.devise = intent.devise;
+      ctx.tva = intent.tva;
+      await updateSession(session.id, state, ctx);
+      // Si le message ne servait qu'à changer la devise → confirmer et s'arrêter là.
+      const onlyChange = text.trim().length <= 30;
+      if (onlyChange) {
+        await sendText(
+          msg.from,
+          `✅ C'est noté, je passe le devis en *${intent.devise}* (TVA ${intent.tva}%).\nVous pouvez continuer.`
+        );
+        return;
+      }
+      // Sinon (devise mentionnée dans une phrase plus longue) on continue le traitement normal.
+    }
   }
 
   switch (state) {
@@ -232,7 +274,7 @@ async function handleRapideCollecting(
         const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF');
         ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
         await updateSession(sessionId, 'RECAP_SENT', ctx);
-        await channel.sendText(from, buildRecapMessage(extraction, montantDetecte));
+        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montantDetecte }));
       } catch (err) {
         console.error('[rapide] split error (auto-montant)', err);
         ctx.rapide_step = 'montant';
@@ -266,7 +308,7 @@ async function handleRapideCollecting(
       const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF');
       ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
       await updateSession(sessionId, 'RECAP_SENT', ctx);
-      await channel.sendText(from, buildRecapMessage(extraction, montant));
+      await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant }));
     } catch (err) {
       console.error('[rapide] split error', err);
       await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
@@ -307,7 +349,7 @@ async function handleAssisteCollecting(
 
     ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
     await updateSession(sessionId, 'RECAP_SENT', ctx);
-    await channel.sendText(from, buildRecapMessage(extraction));
+    await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva }));
   } catch (err) {
     console.error('[assiste] extraction error', err);
     await updateSession(sessionId, 'ASSISTE_COLLECTING', ctx);
@@ -348,7 +390,7 @@ async function handleClarifying(
 
     ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
     await updateSession(sessionId, 'RECAP_SENT', ctx);
-    await channel.sendText(from, buildRecapMessage(extraction));
+    await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva }));
   } catch (err) {
     console.error('[clarifying] error', err);
     await updateSession(sessionId, 'RECAP_SENT', ctx);
@@ -454,7 +496,7 @@ async function createDevisAndSendLink(
     console.warn('[client] upsert error (non-bloquant):', err);
   }
 
-  const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes);
+  const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes, ctx.tva ?? 8.1);
   const finalToken = generateDevisToken();
 
   const devis = await createDevis({

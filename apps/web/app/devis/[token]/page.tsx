@@ -5,7 +5,12 @@ import { useParams } from 'next/navigation';
 import type { Devis, Artisan } from '@devisvocal/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
-const fmt = (n: number) => `CHF ${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, "'")}`;
+// Devise déduite de la TVA : 8.1% = Suisse (CHF), sinon Europe (EUR).
+const deviseFromTva = (tva: number): 'CHF' | 'EUR' => (tva >= 15 ? 'EUR' : 'CHF');
+const makeFmt = (devise: 'CHF' | 'EUR') => (n: number) => {
+  const sep = devise === 'CHF' ? "'" : ' ';
+  return `${devise} ${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, sep)}`;
+};
 
 export default function DevisPage() {
   const { token } = useParams<{ token: string }>();
@@ -108,6 +113,7 @@ export default function DevisPage() {
 
   const isExpired = new Date(devis.expires_at) < new Date();
   const isPaid = devis.statut === 'payé' || devis.statut === 'envoyé';
+  const fmt = makeFmt(deviseFromTva(devis.tva));
 
   return (
     <main className="min-h-screen py-8 px-4">

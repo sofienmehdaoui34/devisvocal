@@ -140,14 +140,16 @@ export function computeTotals(
 
 export function buildRecapMessage(
   extraction: ExtractionResult,
-  montantTtcOriginal?: number
+  opts: { devise?: 'CHF' | 'EUR'; tvaPct?: number; montantTtcOriginal?: number } = {}
 ): string {
-  const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes);
+  const devise = opts.devise ?? 'CHF';
+  const tvaPct = opts.tvaPct ?? 8.1;
+  const { montant_ht, tva, montant_ttc } = computeTotals(extraction.lignes, tvaPct);
   const lignesText = extraction.lignes
-    .map((l) => `• ${l.description} — ${l.quantite} ${l.unite} × ${l.prix_unitaire.toFixed(0)} = ${l.total_ht.toFixed(0)} CHF HT`)
+    .map((l) => `• ${l.description} — ${l.quantite} ${l.unite} × ${l.prix_unitaire.toFixed(0)} = ${l.total_ht.toFixed(0)} ${devise} HT`)
     .join('\n');
 
-  const ttcDisplay = montantTtcOriginal ?? montant_ttc;
+  const ttcDisplay = opts.montantTtcOriginal ?? montant_ttc;
 
   return `📋 *Récap de votre devis*
 
@@ -156,9 +158,9 @@ ${extraction.client_nom ? `👤 Client : ${extraction.client_nom}\n` : ''}
 *Détail des postes :*
 ${lignesText}
 
-💰 Total HT : *${montant_ht.toFixed(2)} CHF*
-💰 TVA ${tva}% : *${(montant_ttc - montant_ht).toFixed(2)} CHF*
-💰 Total TTC : *${ttcDisplay.toFixed(2)} CHF*
+💰 Total HT : *${montant_ht.toFixed(2)} ${devise}*
+💰 TVA ${tva}% : *${(montant_ttc - montant_ht).toFixed(2)} ${devise}*
+💰 Total TTC : *${ttcDisplay.toFixed(2)} ${devise}*
 ${extraction.notes ? `\n📝 ${extraction.notes}` : ''}
 
 ✅ Tapez *OUI* pour générer le devis et obtenir le lien
