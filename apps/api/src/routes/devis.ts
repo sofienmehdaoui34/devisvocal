@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { z } from 'zod';
 import { getDevisByToken, getArtisanById, updateArtisan } from '../services/supabase.js';
 import { createCheckoutSession } from '../services/stripe.js';
 import { safeError } from '../utils/errors.js';
@@ -6,6 +7,29 @@ import { safeError } from '../utils/errors.js';
 const router = Router();
 
 const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
+
+// ─── Validation du corps de POST /:token/pay ──────────────────────────────────
+const optionalStr = (max: number) => z.string().trim().max(max).optional();
+// Email optionnel : on traite la chaîne vide comme absente.
+const optionalEmail = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().trim().email().max(200).optional()
+);
+
+const payBodySchema = z
+  .object({
+    client_nom: optionalStr(200),
+    client_email: optionalEmail,
+    client_adresse: optionalStr(300),
+    client_telephone: optionalStr(40),
+    artisan_nom_entreprise: optionalStr(200),
+    artisan_prenom: optionalStr(100),
+    artisan_email: optionalEmail,
+    artisan_telephone: optionalStr(40),
+    artisan_adresse: optionalStr(300),
+    artisan_siret: optionalStr(60),
+  })
+  .strip();
 
 // GET /api/devis/:token — récupération pour la page web
 router.get('/:token', async (req: Request, res: Response) => {
@@ -44,6 +68,14 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
 
   const artisan = await getArtisanById(devis.artisan_id);
 
+  const parsedBody = payBodySchema.safeParse(req.body ?? {});
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: 'Données invalides',
+      details: parsedBody.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+    });
+    return;
+  }
   const {
     client_nom,
     client_email,
@@ -55,18 +87,7 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     artisan_telephone,
     artisan_adresse,
     artisan_siret,
-  } = req.body as {
-    client_nom?: string;
-    client_email?: string;
-    client_adresse?: string;
-    client_telephone?: string;
-    artisan_nom_entreprise?: string;
-    artisan_prenom?: string;
-    artisan_email?: string;
-    artisan_telephone?: string;
-    artisan_adresse?: string;
-    artisan_siret?: string;
-  };
+  } = parsedBody.data;
 
   const clean = (v?: string) => {
     const t = v?.trim();
@@ -128,6 +149,38 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     console.error('[pay] Stripe error:', safeError(err));
     res.status(500).json({ error: 'Erreur paiement. Réessayez.' });
   }
+});
+
+// POST /api/devis/:id/redeliver — reprise de livraison (admin)
+// Pour les devis payés mais dont la génération/envoi du PDF a échoué.
+router.post('/:id/redeliver', async (req: Request, res: Response) => {
+  const adminToken = process.env.ADMIN_API_TOKEN;
+  if (!adminToken || req.headers['x-admin-token'] !== adminToken) {
+    res.status(403).json({ error: 'Accès refusé' });
+    return;
+  }
+
+  const { id } = req.params;
+  const { getDevisById } = await import('../services/supabase.js');
+  const devis = await getDevisById(id);
+  if (!devis) {
+    res.status(404).json({ error: 'Devis introuvable' });
+    return;
+  }
+  if (devis.statut !== 'payé') {
+    res.status(409).json({ error: `Reprise impossible (statut actuel : ${devis.statut})` });
+    return;
+  }
+
+  const artisan = await getArtisanById(devis.artisan_id);
+  if (!artisan) {
+    res.status(404).json({ error: 'Artisan introuvable' });
+    return;
+  }
+
+  const { deliverDevis } = await import('../agent/dialogue.js');
+  await deliverDevis(devis, artisan);
+  res.json({ ok: true, devis_id: devis.id });
 });
 
 export default router;

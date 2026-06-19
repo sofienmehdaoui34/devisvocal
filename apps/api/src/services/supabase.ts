@@ -1,10 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Artisan, Client, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut } from '@devisvocal/types';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL ?? 'https://placeholder.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? 'placeholder'
-);
+// Pas de fallback "placeholder" : on échoue clairement plutôt que de se
+// connecter silencieusement à une fausse instance (cf. config.ts qui valide
+// déjà ces variables au démarrage).
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY sont requis');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 export { supabase };
 

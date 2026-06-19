@@ -1,7 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ExtractionResult, LigneDevis, Metier } from '@devisvocal/types';
+import { withRetry, withTimeout } from '../utils/retry.js';
+import { safeJsonParse } from '../utils/json.js';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// maxRetries: 0 → on gère nous-mêmes le backoff via withRetry (évite le cumul).
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 });
+
+const CLAUDE_TIMEOUT_MS = 30_000;
 
 // ─── Helper : strip markdown fences ─────────────────────────────────────────
 function stripFences(text: string): string {
@@ -26,7 +31,10 @@ export async function extractDevisFromText(
   description: string,
   metier: Metier | string
 ): Promise<ExtractionResult> {
-  const message = await client.messages.create({
+  const message = await withRetry(
+    () =>
+      withTimeout(
+        client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2000,
     system: EXTRACTION_SYSTEM,
@@ -54,10 +62,15 @@ JSON à retourner (exactement ce format) :
 }`,
       },
     ],
-  });
+        }),
+        CLAUDE_TIMEOUT_MS,
+        'Claude extraction'
+      ),
+    { retries: 2, label: 'claude.extract' }
+  );
 
   const raw = stripFences(message.content[0].type === 'text' ? message.content[0].text.trim() : '{}');
-  const parsed = JSON.parse(raw) as ExtractionResult;
+  const parsed = safeJsonParse<ExtractionResult>(raw, 'extraction Claude');
 
   parsed.lignes = parsed.lignes.map((l: LigneDevis) => ({
     ...l,
@@ -86,7 +99,10 @@ export async function splitMontantEnLignes(
   const tva = devise === 'CHF' ? 8.1 : 20;
   const montantHT = Math.round((montantTTC / (1 + tva / 100)) * 100) / 100;
 
-  const message = await client.messages.create({
+  const message = await withRetry(
+    () =>
+      withTimeout(
+        client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2000,
     system: SPLIT_SYSTEM,
@@ -112,10 +128,15 @@ JSON à retourner :
 }`,
       },
     ],
-  });
+        }),
+        CLAUDE_TIMEOUT_MS,
+        'Claude split montant'
+      ),
+    { retries: 2, label: 'claude.split' }
+  );
 
   const raw = stripFences(message.content[0].type === 'text' ? message.content[0].text.trim() : '{}');
-  const parsed = JSON.parse(raw) as ExtractionResult;
+  const parsed = safeJsonParse<ExtractionResult>(raw, 'split Claude');
 
   // Recalc totals
   parsed.lignes = parsed.lignes.map((l: LigneDevis) => ({

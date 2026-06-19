@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import './config.js'; // valide les variables d'environnement au démarrage
 import express from 'express';
 import webhookTelegram from './routes/webhook-telegram.js';
 import webhookWhatsapp from './routes/webhook-whatsapp.js';
@@ -9,6 +10,10 @@ import { setWebhook } from './services/telegram.js';
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
+// Derrière le proxy Railway : nécessaire pour reconstruire l'URL publique
+// (protocole/host) lors de la validation de signature des webhooks.
+app.set('trust proxy', true);
+
 // ─── Stripe webhook — raw body obligatoire AVANT express.json() ───────────────
 app.use('/webhook/stripe', express.raw({ type: 'application/json' }), webhookStripe);
 
@@ -16,8 +21,11 @@ app.use('/webhook/stripe', express.raw({ type: 'application/json' }), webhookStr
 app.use(express.json());
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
+// Restreint à l'origine du frontend (APP_URL) plutôt que "*".
+const ALLOWED_ORIGIN = process.env.APP_URL ?? '*';
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
@@ -31,8 +39,13 @@ app.use('/api/devis', devisRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
-// ─── Setup webhook Telegram (appelé au démarrage si APP_URL défini) ───────────
-app.get('/setup-webhook', async (_req, res) => {
+// ─── Setup webhook Telegram (protégé par ADMIN_API_TOKEN) ─────────────────────
+app.get('/setup-webhook', async (req, res) => {
+  const adminToken = process.env.ADMIN_API_TOKEN;
+  if (!adminToken || req.headers['x-admin-token'] !== adminToken) {
+    res.status(403).json({ error: 'Accès refusé' });
+    return;
+  }
   const appUrl = process.env.APP_URL;
   if (!appUrl) {
     res.status(400).json({ error: 'APP_URL non défini dans .env' });

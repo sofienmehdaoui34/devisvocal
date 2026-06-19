@@ -1,6 +1,9 @@
 import axios from 'axios';
 import type { Channel } from './channel.js';
 import { safeError } from '../utils/errors.js';
+import { withRetry } from '../utils/retry.js';
+
+const HTTP_TIMEOUT_MS = 30_000;
 
 // ─── Helpers Twilio ───────────────────────────────────────────────────────────
 
@@ -62,10 +65,15 @@ export async function sendText(to: string, text: string): Promise<void> {
   for (const part of parts) {
     try {
       const body = new URLSearchParams({ From: from, To: toAddr, Body: part });
-      const res = await axios.post(msgsUrl(), body.toString(), {
-        auth: { username: sid, password: token },
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
+      const res = await withRetry(
+        () =>
+          axios.post(msgsUrl(), body.toString(), {
+            auth: { username: sid, password: token },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: HTTP_TIMEOUT_MS,
+          }),
+        { retries: 2, label: 'twilio.sendText' }
+      );
       console.log(`[whatsapp] message envoyé SID=${res.data?.sid} status=${res.data?.status}`);
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -102,10 +110,15 @@ export async function sendDocument(
       Body: caption ?? '',
       MediaUrl: documentUrl,
     });
-    await axios.post(msgsUrl(), body.toString(), {
-      auth: { username: sid, password: token },
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
+    await withRetry(
+      () =>
+        axios.post(msgsUrl(), body.toString(), {
+          auth: { username: sid, password: token },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: HTTP_TIMEOUT_MS,
+        }),
+      { retries: 2, label: 'twilio.sendDocument' }
+    );
   } catch (err: unknown) {
     if (axios.isAxiosError(err)) {
       console.error('[whatsapp] Twilio sendDocument error:', err.response?.status, JSON.stringify(err.response?.data));
@@ -123,10 +136,15 @@ export async function getMediaUrl(mediaUrl: string): Promise<string> {
 }
 
 export async function downloadMedia(mediaUrl: string): Promise<Buffer> {
-  const res = await axios.get<ArrayBuffer>(mediaUrl, {
-    responseType: 'arraybuffer',
-    auth: { username: SID(), password: TOKEN() },
-  });
+  const res = await withRetry(
+    () =>
+      axios.get<ArrayBuffer>(mediaUrl, {
+        responseType: 'arraybuffer',
+        auth: { username: SID(), password: TOKEN() },
+        timeout: HTTP_TIMEOUT_MS,
+      }),
+    { retries: 2, label: 'twilio.downloadMedia' }
+  );
   return Buffer.from(res.data);
 }
 

@@ -1,4 +1,4 @@
-import type { Artisan, WhatsAppInboundMessage, SessionContext } from '@devisvocal/types';
+import type { Artisan, Devis, WhatsAppInboundMessage, SessionContext } from '@devisvocal/types';
 import type { Channel } from '../services/channel.js';
 import {
   findOrCreateArtisan,
@@ -56,7 +56,7 @@ function normText(text: string): string {
 }
 
 // Devise + TVA selon préfixe du numéro de téléphone
-function getDevise(from: string): { devise: string; tva: number } {
+export function getDevise(from: string): { devise: string; tva: number } {
   if (from.startsWith('+33') || from.startsWith('0033')) return { devise: 'EUR', tva: 20 };
   if (from.startsWith('+32') || from.startsWith('0032')) return { devise: 'EUR', tva: 21 };
   return { devise: 'CHF', tva: 8.1 }; // Suisse par défaut
@@ -65,7 +65,7 @@ function getDevise(from: string): { devise: string; tva: number } {
 // Détecte une demande explicite de changement de devise dans le chat.
 // Ex: "mets-le en CHF", "plutôt en euros", "en francs suisses", "facture en EUR".
 // Renvoie null si aucune intention claire (pour ne pas confondre avec "5000 CHF").
-function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number } | null {
+export function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number } | null {
   const t = text.toLowerCase();
   const hasChf = /\b(chf|francs?\s*suisses?|francs?\s*ch)\b/.test(t);
   const hasEur = /(\beuros?\b|\beur\b|€)/.test(t);
@@ -85,7 +85,7 @@ function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number 
 
 // Détection du métier depuis la description des travaux
 import type { Metier } from '@devisvocal/types';
-function inferMetier(description: string): Metier | null {
+export function inferMetier(description: string): Metier | null {
   const d = description.toLowerCase();
   if (/plomb|chaudière|chauffage|sanitaire|robinet|canalisation|wc|douche/.test(d)) return 'plombier';
   if (/électr|câbl|tableau|prise|disjoncteur|éclairage|interrupteur/.test(d))       return 'electricien';
@@ -270,7 +270,7 @@ function extractMontantFromText(text: string): number | null {
 
 async function handleRapideCollecting(
   from: string,
-  artisan: Artisan,
+  _artisan: Artisan,
   sessionId: string,
   ctx: SessionContext,
   text: string,
@@ -567,8 +567,7 @@ async function createDevisAndSendLink(
 
 export async function handlePaymentSuccess(
   stripeSessionId: string,
-  _paymentIntentId: string,
-  _channel: Channel
+  paymentIntentId: string
 ): Promise<void> {
   const { getArtisanById, updateDevisStatut, savePaiement, getDevisByToken } = await import('../services/supabase.js');
   const { getCheckoutSession } = await import('../services/stripe.js');
@@ -583,16 +582,34 @@ export async function handlePaymentSuccess(
   const artisan = await getArtisanById(devis.artisan_id);
   if (!artisan) throw new Error(`Artisan non trouvé ${devis.artisan_id}`);
 
+  // Idempotence : déjà entièrement livré → on ne refait rien.
+  if (devis.statut === 'envoyé') {
+    console.log(`[payment] devis ${devis.numero} déjà envoyé — ignoré (idempotence)`);
+    return;
+  }
+
   // 1) Enregistre le paiement et marque le devis 'payé' IMMÉDIATEMENT.
   //    Ainsi la page web débloque le devis dès le retour, même si la
   //    génération PDF / l'envoi échoue ensuite (Puppeteer fragile sur Render).
-  await savePaiement(devis.id, _paymentIntentId, devis.montant_ttc);
+  //    savePaiement lève sur doublon (contrainte UNIQUE stripe_payment_id) :
+  //    c'est le garde-fou contre un rejeu du webhook (pas de double livraison).
+  await savePaiement(devis.id, paymentIntentId, devis.montant_ttc);
   await updateDevisStatut(devis.id, 'payé', { paid_at: new Date().toISOString() });
   await incrementDevisCount(artisan.id);
   console.log(`[payment] devis ${devis.numero} marqué payé`);
 
   // 2) Génération PDF + livraison : best-effort, ne doit JAMAIS rejeter
   //    (sinon le webhook Stripe renverra une erreur et rejouera l'event).
+  await deliverDevis(devis, artisan);
+}
+
+/**
+ * Génère le PDF du devis, l'uploade et le livre (WhatsApp/Telegram + email).
+ * Best-effort : log mais ne rejette jamais (le devis est déjà payé).
+ * Réutilisable pour une reprise de livraison (cf. route /redeliver).
+ */
+export async function deliverDevis(devis: Devis, artisan: Artisan): Promise<void> {
+  const { updateDevisStatut } = await import('../services/supabase.js');
   try {
     const channel = await channelFromNumber(artisan.whatsapp_number);
     const pdfBuffer = await generateDevisPdf(devis, artisan);
