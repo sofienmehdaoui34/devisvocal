@@ -1,4 +1,4 @@
-import type { Artisan, Devis, WhatsAppInboundMessage, SessionContext } from '@devisvocal/types';
+import type { Artisan, Devis, WhatsAppInboundMessage, SessionContext, ExtractionResult } from '@devisvocal/types';
 import type { Channel } from '../services/channel.js';
 import {
   findOrCreateArtisan,
@@ -18,6 +18,7 @@ import { transcribeAudioBuffer } from '../services/whisper.js';
 import {
   extractDevisFromText,
   splitMontantEnLignes,
+  applyRecapEdit,
   computeTotals,
   buildRecapMessage,
   buildQuestionsMessage,
@@ -30,6 +31,7 @@ import { generateDevisPdf } from '@devisvocal/pdf';
 
 const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
 const MAX_CLARIFICATION_ROUNDS = 2;
+const MAX_EDIT_ROUNDS = 5; // garde-fou coût : retouches conversationnelles du récap
 
 // Construit le bon canal (WhatsApp si numéro E.164 avec "+", Telegram sinon)
 async function channelFromNumber(number: string): Promise<Channel> {
@@ -440,8 +442,8 @@ async function handleRecapResponse(
   if (n === 'NON' || n === 'NO' || n === 'CORRIGER' || n === 'NON CORRIGER') {
     const backState = ctx.mode === 'rapide' ? 'RAPIDE_COLLECTING' : 'ASSISTE_COLLECTING';
     const backCtx: SessionContext = ctx.mode === 'rapide'
-      ? { ...ctx, rapide_step: 'description', devis_partiel: undefined }
-      : { ...ctx, description_brute: undefined, clarification_round: 0, devis_partiel: undefined };
+      ? { ...ctx, rapide_step: 'description', devis_partiel: undefined, edit_round: 0 }
+      : { ...ctx, description_brute: undefined, clarification_round: 0, devis_partiel: undefined, edit_round: 0 };
     await updateSession(sessionId, backState, backCtx);
     await channel.sendText(from, ctx.mode === 'rapide'
       ? MSG.rapide_demande_description()
@@ -450,12 +452,53 @@ async function handleRecapResponse(
     return;
   }
 
-  // Texte libre → correction directe
+  // Texte libre → retouche conversationnelle du récap (édition fine).
+  // On modifie devis_partiel sans tout recommencer, sauf si l'instruction décrit
+  // en réalité un nouveau devis (is_new_devis) ou si l'édition échoue.
+  const partiel = ctx.devis_partiel as ExtractionResult | undefined;
+  const editRound = ctx.edit_round ?? 0;
+
+  if (partiel?.lignes?.length) {
+    if (editRound >= MAX_EDIT_ROUNDS) {
+      await channel.sendText(
+        from,
+        `On a déjà bien ajusté 🙂 Répondez *OUI* pour générer le devis, ou *RECOMMENCER* pour repartir de zéro.`
+      );
+      return;
+    }
+
+    await channel.sendText(from, MSG.rapide_analyse());
+    try {
+      const { extraction, is_new_devis } = await applyRecapEdit(partiel, text);
+
+      if (!is_new_devis) {
+        if (extraction.lignes.length === 0) {
+          await channel.sendText(
+            from,
+            `Cette modification viderait le devis. Répondez *OUI* pour garder le devis actuel, ou *RECOMMENCER* pour repartir.`
+          );
+          return;
+        }
+        ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
+        ctx.edit_round = editRound + 1;
+        await updateSession(sessionId, 'RECAP_SENT', ctx);
+        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva }));
+        return;
+      }
+      // is_new_devis → on retombe sur le redémarrage du tunnel ci-dessous.
+    } catch (err) {
+      console.error('[recap] édition error', safeError(err));
+      // Échec d'édition → redémarrage classique (filet de sécurité).
+    }
+  }
+
+  // Nouveau devis (ou pas de devis partiel / échec édition) → on redémarre le tunnel.
   if (ctx.mode === 'rapide') {
-    await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
+    await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description', edit_round: 0 });
     await handleRapideCollecting(from, artisan, sessionId, { ...ctx, rapide_step: 'description' }, text, channel);
   } else {
     ctx.description_brute = text;
+    ctx.edit_round = 0;
     await handleAssisteCollecting(from, artisan, sessionId, ctx, text, channel);
   }
 }

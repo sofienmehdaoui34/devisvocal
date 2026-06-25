@@ -52,6 +52,8 @@ export interface SessionContext {
 
   // Devis en cours d'extraction
   devis_partiel?: unknown;
+  // Nombre de retouches conversationnelles appliquées au récap (garde-fou coût)
+  edit_round?: number;
 
   // Client lié au devis
   client_id?: string;

@@ -13,6 +13,16 @@ function stripFences(text: string): string {
   return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
 }
 
+// Recalcule total_ht = quantite × prix_unitaire (arrondi au centime) pour chaque
+// ligne. Source de vérité unique pour les lignes produites par Claude (extraction,
+// split, édition) : on ne fait jamais confiance au total_ht renvoyé par le modèle.
+export function recomputeLignes(lignes: LigneDevis[]): LigneDevis[] {
+  return lignes.map((l) => ({
+    ...l,
+    total_ht: Math.round(l.quantite * l.prix_unitaire * 100) / 100,
+  }));
+}
+
 // ─── Tunnel ASSISTÉ : extraction depuis description libre ────────────────────
 
 const EXTRACTION_SYSTEM = `Tu es un assistant spécialisé dans la création de devis pour les artisans.
@@ -72,10 +82,7 @@ JSON à retourner (exactement ce format) :
   const raw = stripFences(message.content[0].type === 'text' ? message.content[0].text.trim() : '{}');
   const parsed = safeJsonParse<ExtractionResult>(raw, 'extraction Claude');
 
-  parsed.lignes = parsed.lignes.map((l: LigneDevis) => ({
-    ...l,
-    total_ht: Math.round(l.quantite * l.prix_unitaire * 100) / 100,
-  }));
+  parsed.lignes = recomputeLignes(parsed.lignes);
 
   return parsed;
 }
@@ -139,12 +146,78 @@ JSON à retourner :
   const parsed = safeJsonParse<ExtractionResult>(raw, 'split Claude');
 
   // Recalc totals
-  parsed.lignes = parsed.lignes.map((l: LigneDevis) => ({
-    ...l,
-    total_ht: Math.round(l.quantite * l.prix_unitaire * 100) / 100,
-  }));
+  parsed.lignes = recomputeLignes(parsed.lignes);
 
   return parsed;
+}
+
+// ─── Édition conversationnelle du récap ──────────────────────────────────────
+
+const EDIT_SYSTEM = `Tu es un assistant qui modifie un devis existant selon une instruction en langage naturel.
+Tu reçois la liste des lignes actuelles (JSON) et une instruction de l'artisan.
+
+Ta tâche :
+- Applique l'instruction : modifier un prix/une quantité, renommer, AJOUTER ou SUPPRIMER une ligne.
+- Les lignes sont numérotées à partir de 1 dans l'ordre fourni ("ligne 2" = 2e ligne).
+- Renvoie TOUTES les lignes après modification (pas seulement celles modifiées), dans l'ordre.
+- Unités possibles : h, m², m, m³, pcs, forfait, kg.
+- Si l'instruction n'est PAS une retouche mais la description d'un NOUVEAU devis
+  (chantier différent, repart de zéro), mets "is_new_devis": true et renvoie "lignes": [].
+
+Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks, au format :
+{"is_new_devis": false, "lignes": [{"description":"...","quantite":0,"unite":"...","prix_unitaire":0,"total_ht":0}]}`;
+
+/**
+ * Applique une retouche en langage naturel aux lignes d'un devis en cours de récap.
+ * Renvoie l'extraction mise à jour (mêmes métadonnées, lignes recalculées) et un
+ * drapeau `is_new_devis` indiquant que l'instruction décrit en réalité un nouveau
+ * devis (auquel cas l'appelant retombe sur le flux de redémarrage).
+ */
+export async function applyRecapEdit(
+  extraction: ExtractionResult,
+  instruction: string
+): Promise<{ extraction: ExtractionResult; is_new_devis: boolean }> {
+  const lignesActuelles = extraction.lignes
+    .map((l, i) => `${i + 1}. ${l.description} — ${l.quantite} ${l.unite} × ${l.prix_unitaire}`)
+    .join('\n');
+
+  const message = await withRetry(
+    () =>
+      withTimeout(
+        client.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 2000,
+          system: EDIT_SYSTEM,
+          messages: [
+            {
+              role: 'user',
+              content: `Lignes actuelles :
+${lignesActuelles}
+
+Instruction de l'artisan :
+"""
+${instruction}
+"""`,
+            },
+          ],
+        }),
+        CLAUDE_TIMEOUT_MS,
+        'Claude édition récap'
+      ),
+    { retries: 2, label: 'claude.edit' }
+  );
+
+  const raw = stripFences(message.content[0].type === 'text' ? message.content[0].text.trim() : '{}');
+  const parsed = safeJsonParse<{ is_new_devis?: boolean; lignes?: LigneDevis[] }>(raw, 'édition Claude');
+
+  if (parsed.is_new_devis) {
+    return { extraction, is_new_devis: true };
+  }
+
+  return {
+    extraction: { ...extraction, lignes: recomputeLignes(parsed.lignes ?? []) },
+    is_new_devis: false,
+  };
 }
 
 // ─── Utilitaires partagés ────────────────────────────────────────────────────
@@ -178,7 +251,7 @@ export function buildRecapMessage(
 ${extraction.client_nom ? `👤 ${extraction.client_nom}\n` : ''}${lignesText}
 💰 HT *${montant_ht.toFixed(0)}* · TVA ${tva}% *${(montant_ttc - montant_ht).toFixed(0)}* · TTC *${ttcDisplay.toFixed(2)} ${devise}*${extraction.notes ? `\n📝 ${extraction.notes}` : ''}
 
-✅ *OUI* = générer le lien · ✏️ *NON* = recommencer`;
+✅ *OUI* = générer · ✏️ dites quoi changer (ex: « ligne 2 à 300 », « enlève le déplacement ») · *NON* = tout refaire`;
 }
 
 export function buildQuestionsMessage(questions: string[]): string {
