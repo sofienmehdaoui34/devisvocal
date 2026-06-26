@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { getDevisByToken, getArtisanById, updateArtisan } from '../services/supabase.js';
 import { createCheckoutSession } from '../services/stripe.js';
+import { isDevisFree, freeDevisRemaining } from '../utils/pricing.js';
 import { safeError } from '../utils/errors.js';
 
 const router = Router();
@@ -47,8 +48,10 @@ router.get('/:token', async (req: Request, res: Response) => {
   }
 
   const artisan = await getArtisanById(devis.artisan_id);
+  const is_free = artisan ? isDevisFree(artisan.devis_count) : false;
+  const free_remaining = artisan ? freeDevisRemaining(artisan.devis_count) : 0;
 
-  res.json({ devis, artisan });
+  res.json({ devis, artisan, is_free, free_remaining });
 });
 
 // POST /api/devis/:token/pay — création session Stripe Checkout
@@ -128,6 +131,21 @@ router.post('/:token/pay', async (req: Request, res: Response) => {
     } catch (e) {
       console.error('[pay] échec sauvegarde client (non-bloquant):', e);
     }
+  }
+
+  // ─── Devis offerts : les N premiers devis de l'artisan sont gratuits ────────
+  // Pas de Stripe : on génère et livre directement, puis on renvoie l'utilisateur
+  // sur la page du devis (qui s'affichera « payé », détail + PDF débloqués).
+  if (artisan && isDevisFree(artisan.devis_count)) {
+    try {
+      const { deliverFreeDevis } = await import('../agent/dialogue.js');
+      await deliverFreeDevis(devis.id);
+      res.json({ url: `${APP_URL}/devis/${token}`, free: true });
+    } catch (e) {
+      console.error('[pay] génération du devis offert échouée:', safeError(e));
+      res.status(500).json({ error: 'Erreur lors de la génération. Réessayez.' });
+    }
+    return;
   }
 
   // Si pas de clé Stripe → mode dev, on simule un lien direct

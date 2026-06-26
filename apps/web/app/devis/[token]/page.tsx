@@ -19,6 +19,8 @@ export default function DevisPage() {
   const [artisan, setArtisan] = useState<Artisan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isFree, setIsFree] = useState(false);
+  const [freeRemaining, setFreeRemaining] = useState(0);
   const [isPending, startTransition] = useTransition();
 
   const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
@@ -42,6 +44,8 @@ export default function DevisPage() {
         const data = (await r.json().catch(() => ({ error: 'Réponse invalide du serveur.' }))) as {
           devis?: Devis;
           artisan?: Artisan;
+          is_free?: boolean;
+          free_remaining?: number;
           error?: string;
         };
         // 404 (introuvable) / 410 (expiré) renvoient un message explicite côté API.
@@ -51,6 +55,8 @@ export default function DevisPage() {
         }
         setDevis(data.devis);
         setArtisan(data.artisan ?? null);
+        setIsFree(data.is_free ?? false);
+        setFreeRemaining(data.free_remaining ?? 0);
         // Pré-remplir les infos client déjà connues
         setClientNom(data.devis.client_nom ?? '');
         setClientEmail(data.devis.client_email ?? '');
@@ -103,7 +109,7 @@ export default function DevisPage() {
             artisan_siret: artisanSiret || undefined,
           }),
         });
-        const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+        const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string; free?: boolean };
         if (!res.ok || !data.url) {
           setFormError(data.error ?? 'Erreur lors du paiement. Réessayez.');
           return;
@@ -171,6 +177,20 @@ export default function DevisPage() {
           </div>
         )}
 
+        {/* Devis offert */}
+        {!isPaid && !isExpired && isFree && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <span className="text-2xl">🎁</span>
+            <div>
+              <p className="font-semibold text-emerald-800">Devis offert</p>
+              <p className="text-emerald-600 text-sm">
+                Vos {freeRemaining} premier{freeRemaining > 1 ? 's' : ''} devis{' '}
+                {freeRemaining > 1 ? 'sont gratuits' : 'est gratuit'} — celui-ci est inclus.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Expiré */}
         {isExpired && !isPaid && (
           <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 flex items-center gap-3">
@@ -206,14 +226,11 @@ export default function DevisPage() {
             </div>
           )}
 
-          {/* Lignes — floutées tant que le devis n'est pas payé */}
+          {/* Lignes — APERÇU : structure visible, prix masqués tant que non payé.
+              On montre la réalité du devis (postes, quantités) pour rassurer,
+              tout en gardant la valeur (prix) derrière le paiement + filigrane. */}
           <div className="relative">
-            <div
-              className={`overflow-x-auto transition ${
-                !isPaid ? 'blur-sm select-none pointer-events-none' : ''
-              }`}
-              aria-hidden={!isPaid}
-            >
+            <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
@@ -230,31 +247,42 @@ export default function DevisPage() {
                       <td className="px-6 py-4 text-gray-900">{ligne.description}</td>
                       <td className="px-4 py-4 text-center text-gray-600">{ligne.quantite}</td>
                       <td className="px-4 py-4 text-center text-gray-600">{ligne.unite}</td>
-                      <td className="px-4 py-4 text-right text-gray-600">{fmt(ligne.prix_unitaire)}</td>
-                      <td className="px-6 py-4 text-right font-semibold text-gray-900">{fmt(ligne.total_ht)}</td>
+                      <td className="px-4 py-4 text-right text-gray-600">
+                        {isPaid ? fmt(ligne.prix_unitaire) : <span className="text-gray-300">🔒</span>}
+                      </td>
+                      <td className="px-6 py-4 text-right font-semibold text-gray-900">
+                        {isPaid ? fmt(ligne.total_ht) : <span className="text-gray-300">🔒</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
 
-            {/* Overlay cadenas — masque le détail tant que !isPaid */}
+            {/* Filigrane « APERÇU » tant que le devis n'est pas payé */}
             {!isPaid && (
-              <div className="absolute inset-0 flex items-center justify-center bg-white/30">
-                <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-6 py-5 text-center max-w-xs mx-4">
-                  <div className="text-3xl mb-2">🔒</div>
-                  <p className="font-bold text-gray-900">Détail du devis verrouillé</p>
-                  <p className="text-gray-500 text-sm mt-1">
-                    {devis.lignes_json.length} poste{devis.lignes_json.length > 1 ? 's' : ''} · Total
-                    visible ci-dessous
-                  </p>
-                  <p className="text-brand text-sm font-semibold mt-2">
-                    Payez 2.90 CHF pour débloquer le détail et le PDF
-                  </p>
-                </div>
+              <div
+                className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden"
+                aria-hidden="true"
+              >
+                <span className="select-none rotate-[-20deg] text-5xl sm:text-7xl font-black tracking-widest text-gray-900/10">
+                  APERÇU
+                </span>
               </div>
             )}
           </div>
+
+          {/* Bandeau d'explication de l'aperçu */}
+          {!isPaid && (
+            <div className="border-t border-amber-100 bg-amber-50 px-6 py-3 text-center">
+              <p className="text-sm text-amber-700">
+                👀 Aperçu du devis —{' '}
+                {isFree
+                  ? 'génération offerte, prix + PDF débloqués à la validation'
+                  : 'les prix unitaires et le PDF se débloquent au paiement'}
+              </p>
+            </div>
+          )}
 
           {/* Totaux — détail HT/TVA masqué tant que !isPaid, TTC toujours visible */}
           <div className="border-t border-gray-100 px-6 py-4 space-y-2">
@@ -285,7 +313,9 @@ export default function DevisPage() {
         {/* Zone paiement */}
         {!isPaid && !isExpired && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
-            <h2 className="font-bold text-gray-900 text-lg">Télécharger le PDF — 2.90 CHF</h2>
+            <h2 className="font-bold text-gray-900 text-lg">
+              {isFree ? '🎁 Générer le PDF — Offert' : 'Télécharger le PDF — 2.90 CHF'}
+            </h2>
 
             {/* ── Prestataire — auto-rempli depuis le profil sauvegardé ── */}
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-3">
@@ -430,16 +460,20 @@ export default function DevisPage() {
               {isPending ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" aria-hidden="true" />
-                  Redirection...
+                  {isFree ? 'Génération...' : 'Redirection...'}
                 </>
+              ) : isFree ? (
+                <>🎁 Générer mon devis gratuitement</>
               ) : (
                 <>💳 Payer 2.90 CHF et télécharger</>
               )}
             </button>
 
-            <p className="text-xs text-gray-400 text-center">
-              Paiement sécurisé par Stripe · CB, Apple Pay, Google Pay
-            </p>
+            {!isFree && (
+              <p className="text-xs text-gray-400 text-center">
+                Paiement sécurisé par Stripe · CB, Apple Pay, Google Pay
+              </p>
+            )}
           </div>
         )}
 

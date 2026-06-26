@@ -676,6 +676,35 @@ export async function handlePaymentSuccess(
 }
 
 /**
+ * Livraison d'un devis OFFERT (Jalon 3) : pas de Stripe. On enregistre un
+ * « paiement » à 0 (la contrainte UNIQUE stripe_payment_id sert de garde-fou
+ * anti double-clic), on marque le devis payé, on incrémente le compteur, puis
+ * on génère/envoie le PDF. Appelé par la route /pay quand le devis est offert.
+ */
+export async function deliverFreeDevis(devisId: string): Promise<void> {
+  const { getDevisById, getArtisanById, updateDevisStatut, savePaiement } = await import('../services/supabase.js');
+
+  const devis = await getDevisById(devisId);
+  if (!devis) throw new Error(`Devis introuvable ${devisId}`);
+  if (devis.statut === 'envoyé') return; // idempotence : déjà livré
+
+  const artisan = await getArtisanById(devis.artisan_id);
+  if (!artisan) throw new Error(`Artisan introuvable ${devis.artisan_id}`);
+
+  try {
+    await savePaiement(devis.id, `free_${devis.id}`, 0);
+  } catch (err) {
+    // Doublon (UNIQUE) → livraison déjà initiée par un précédent clic.
+    console.warn(`[free] devis ${devis.numero} déjà traité (idempotence):`, safeError(err));
+    return;
+  }
+
+  await updateDevisStatut(devis.id, 'payé', { paid_at: new Date().toISOString() });
+  await incrementDevisCount(artisan.id);
+  await deliverDevis(devis, artisan);
+}
+
+/**
  * Génère le PDF du devis, l'uploade et le livre (WhatsApp/Telegram + email).
  * Best-effort : log mais ne rejette jamais (le devis est déjà payé).
  * Réutilisable pour une reprise de livraison (cf. route /redeliver).
