@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 jobs:
@@ -11,10 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pas de "version:" ici : la version de pnpm est déterminée par le champ
+      # packageManager (pnpm@9.0.0) de package.json — éviter le double conflit.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
