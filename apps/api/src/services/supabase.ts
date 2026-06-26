@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Artisan, Client, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut } from '@devisvocal/types';
+import type { Artisan, Client, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut, Prestation } from '@devisvocal/types';
 
 // Pas de fallback "placeholder" : on échoue clairement plutôt que de se
 // connecter silencieusement à une fausse instance (cf. config.ts qui valide
@@ -260,6 +260,81 @@ export async function listClients(artisanId: string): Promise<Client[]> {
     .order('updated_at', { ascending: false });
   if (error) throw error;
   return (data as Client[]) ?? [];
+}
+
+// ─── Prestations (bibliothèque de prix par artisan) ──────────────────────────
+
+// Normalise un libellé de prestation pour le rapprochement (clé d'unicité) :
+// minuscule, trim, espaces multiples compactés.
+export function normalizePrestationLabel(label: string): string {
+  return (label ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Transforme les lignes d'un devis en prestations à mémoriser : on normalise le
+// libellé, on ignore les lignes sans prix, et on dédoublonne par (label, unité)
+// en gardant la dernière occurrence (l'artisan vient de valider ces prix).
+export function lignesToPrestations(
+  lignes: LigneDevis[],
+  devise: 'CHF' | 'EUR'
+): Array<{ label: string; unite: string; prix_unitaire: number; devise: 'CHF' | 'EUR' }> {
+  const seen = new Map<string, { label: string; unite: string; prix_unitaire: number; devise: 'CHF' | 'EUR' }>();
+  for (const l of lignes ?? []) {
+    const label = normalizePrestationLabel(l.description);
+    const unite = (l.unite ?? '').trim();
+    if (!label || !unite || !(l.prix_unitaire > 0)) continue;
+    seen.set(`${label}|${unite}`, { label, unite, prix_unitaire: l.prix_unitaire, devise });
+  }
+  return [...seen.values()];
+}
+
+// Retourne les prestations connues d'un artisan, les plus utilisées d'abord.
+export async function listPrestations(artisanId: string, limit = 50): Promise<Prestation[]> {
+  const { data, error } = await supabase
+    .from('prestations')
+    .select('*')
+    .eq('artisan_id', artisanId)
+    .order('usage_count', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as Prestation[]) ?? [];
+}
+
+// Mémorise (upsert) les prestations issues d'un devis validé : incrémente
+// usage_count et met à jour le prix si la prestation existe déjà, sinon l'insère.
+// Best-effort par ligne : une ligne en échec n'empêche pas les autres.
+export async function rememberPrestations(
+  artisanId: string,
+  lignes: LigneDevis[],
+  devise: 'CHF' | 'EUR'
+): Promise<void> {
+  const rows = lignesToPrestations(lignes, devise);
+  for (const r of rows) {
+    try {
+      const { data: existing, error } = await supabase
+        .from('prestations')
+        .select('id, usage_count')
+        .eq('artisan_id', artisanId)
+        .eq('label', r.label)
+        .eq('unite', r.unite)
+        .eq('devise', r.devise)
+        .single();
+      if (error && error.code !== 'PGRST116') throw error;
+
+      const now = new Date().toISOString();
+      if (existing) {
+        await supabase
+          .from('prestations')
+          .update({ prix_unitaire: r.prix_unitaire, usage_count: (existing.usage_count ?? 0) + 1, last_used_at: now })
+          .eq('id', existing.id);
+      } else {
+        await supabase
+          .from('prestations')
+          .insert({ artisan_id: artisanId, ...r, usage_count: 1, last_used_at: now });
+      }
+    } catch (e) {
+      console.warn('[prestations] upsert error (non-bloquant):', e);
+    }
+  }
 }
 
 // ─── Supabase Storage (PDF) ───────────────────────────────────────────────────

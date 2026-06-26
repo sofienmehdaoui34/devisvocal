@@ -23,6 +23,19 @@ export function recomputeLignes(lignes: LigneDevis[]): LigneDevis[] {
   }));
 }
 
+// Formate les prestations connues d'un artisan en indices de prix compacts
+// injectés dans le prompt d'extraction (top-N pour ne pas gonfler le contexte).
+export function buildPriceHints(
+  prestations: Array<{ label: string; unite: string; prix_unitaire: number; devise: string }>,
+  limit = 30
+): string {
+  if (!prestations?.length) return '';
+  return prestations
+    .slice(0, limit)
+    .map((p) => `- ${p.label} : ${p.prix_unitaire} ${p.devise}/${p.unite}`)
+    .join('\n');
+}
+
 // ─── Tunnel ASSISTÉ : extraction depuis description libre ────────────────────
 
 const EXTRACTION_SYSTEM = `Tu es un assistant spécialisé dans la création de devis pour les artisans.
@@ -30,6 +43,7 @@ Tu reçois une description d'un travail et tu extrais les informations pour un d
 
 Règles :
 - Estime des prix unitaires réalistes (marché suisse/français selon le contexte)
+- Si des "tarifs habituels" sont fournis, réutilise leur prix unitaire quand une prestation correspond (sinon estime au prix marché)
 - Si une info est manquante et bloquante, liste-la dans "questions_manquantes" (max 3)
 - Regroupe les questions similaires en une seule
 - Les unités : h (heures), m² (mètres carrés), m (mètres linéaires), m³, pcs (pièces), forfait, kg
@@ -39,7 +53,8 @@ Règles :
 
 export async function extractDevisFromText(
   description: string,
-  metier: Metier | string
+  metier: Metier | string,
+  priceHints?: string
 ): Promise<ExtractionResult> {
   const message = await withRetry(
     () =>
@@ -57,7 +72,7 @@ Description :
 """
 ${description}
 """
-
+${priceHints ? `\nTarifs habituels de cet artisan (réutilise ces prix unitaires quand la prestation correspond) :\n${priceHints}\n` : ''}
 JSON à retourner (exactement ce format) :
 {
   "lignes": [{"description":"...","quantite":0,"unite":"...","prix_unitaire":0,"total_ht":0}],
@@ -96,12 +111,14 @@ Règles ABSOLUES :
 - 4 à 6 postes dans l'ordre chronologique du chantier (préparation → réalisation → finitions)
 - La somme des total_ht × (1 + tva/100) doit être TRÈS PROCHE du montant TTC fourni
 - Prix unitaires cohérents et réalistes
+- Si des "tarifs habituels" sont fournis, aligne les postes correspondants sur ces prix
 - Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks`;
 
 export async function splitMontantEnLignes(
   description: string,
   montantTTC: number,
-  devise = 'CHF'
+  devise = 'CHF',
+  priceHints?: string
 ): Promise<ExtractionResult> {
   const tva = devise === 'CHF' ? 8.1 : 20;
   const montantHT = Math.round((montantTTC / (1 + tva / 100)) * 100) / 100;
@@ -120,7 +137,7 @@ export async function splitMontantEnLignes(
 Montant TTC : ${montantTTC} ${devise}
 TVA : ${tva}%
 Montant HT cible : ${montantHT} ${devise}
-
+${priceHints ? `\nTarifs habituels de cet artisan (aligne les postes correspondants) :\n${priceHints}\n` : ''}
 JSON à retourner :
 {
   "lignes": [{"description":"...","quantite":1,"unite":"forfait","prix_unitaire":0,"total_ht":0}],

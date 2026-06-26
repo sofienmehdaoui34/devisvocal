@@ -12,6 +12,8 @@ import {
   uploadPdf,
   findClientByName,
   upsertClient,
+  listPrestations,
+  rememberPrestations,
 } from '../services/supabase.js';
 import { MSG } from '../services/telegram.js';
 import { transcribeAudioBuffer } from '../services/whisper.js';
@@ -22,6 +24,7 @@ import {
   computeTotals,
   buildRecapMessage,
   buildQuestionsMessage,
+  buildPriceHints,
 } from '../services/claude.js';
 import { createCheckoutSession } from '../services/stripe.js';
 import { sendDevisEmail } from '../services/email.js';
@@ -55,6 +58,20 @@ function parseCtx(raw: unknown): SessionContext {
 
 function normText(text: string): string {
   return text.trim().toUpperCase();
+}
+
+// Charge les tarifs habituels de l'artisan (filtrés par devise) pour les injecter
+// dans l'extraction Claude. Best-effort : renvoie undefined si vide ou en erreur.
+async function loadPriceHints(artisanId: string, devise?: 'CHF' | 'EUR'): Promise<string | undefined> {
+  try {
+    const prestations = await listPrestations(artisanId, 50);
+    const filtered = devise ? prestations.filter((p) => p.devise === devise) : prestations;
+    const hints = buildPriceHints(filtered, 30);
+    return hints || undefined;
+  } catch (err) {
+    console.warn('[prestations] chargement des tarifs échoué (non-bloquant):', safeError(err));
+    return undefined;
+  }
 }
 
 // Devise + TVA selon préfixe du numéro de téléphone
@@ -272,7 +289,7 @@ function extractMontantFromText(text: string): number | null {
 
 async function handleRapideCollecting(
   from: string,
-  _artisan: Artisan,
+  artisan: Artisan,
   sessionId: string,
   ctx: SessionContext,
   text: string,
@@ -295,7 +312,8 @@ async function handleRapideCollecting(
       await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
       await channel.sendText(from, MSG.rapide_analyse());
       try {
-        const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF');
+        const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+        const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF', priceHints);
         ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
         await updateSession(sessionId, 'RECAP_SENT', ctx);
         await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montantDetecte }));
@@ -329,7 +347,8 @@ async function handleRapideCollecting(
     await channel.sendText(from, MSG.rapide_analyse());
 
     try {
-      const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF');
+      const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+      const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF', priceHints);
       ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
       await updateSession(sessionId, 'RECAP_SENT', ctx);
       await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant }));
@@ -359,7 +378,8 @@ async function handleAssisteCollecting(
   await updateSession(sessionId, 'ASSISTE_COLLECTING', ctx);
 
   try {
-    const extraction = await extractDevisFromText(ctx.description_brute, artisan.metier ?? 'autre');
+    const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+    const extraction = await extractDevisFromText(ctx.description_brute, artisan.metier ?? 'autre', priceHints);
 
     if (extraction.questions_manquantes.length > 0 && ctx.clarification_round < MAX_CLARIFICATION_ROUNDS) {
       ctx.questions_restantes = extraction.questions_manquantes;
@@ -402,7 +422,8 @@ async function handleClarifying(
   await updateSession(sessionId, 'CLARIFYING', ctx);
 
   try {
-    const extraction = await extractDevisFromText(ctx.description_brute ?? text, artisan.metier ?? 'autre');
+    const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+    const extraction = await extractDevisFromText(ctx.description_brute ?? text, artisan.metier ?? 'autre', priceHints);
 
     if (extraction.questions_manquantes.length > 0 && (ctx.clarification_round ?? 0) < MAX_CLARIFICATION_ROUNDS) {
       ctx.questions_restantes = extraction.questions_manquantes;
@@ -579,6 +600,14 @@ async function createDevisAndSendLink(
   await import('../services/supabase.js').then(m =>
     m.updateDevisStatut(devis.id, 'en_attente_paiement', {})
   );
+
+  // Apprentissage (Jalon 2) : mémoriser les tarifs validés pour les réutiliser
+  // lors des prochains devis. Best-effort — ne bloque jamais la création.
+  try {
+    await rememberPrestations(artisan.id, extraction.lignes, ctx.devise ?? 'CHF');
+  } catch (err) {
+    console.warn('[prestations] mémorisation échouée (non-bloquant):', safeError(err));
+  }
 
   let linkUrl: string;
   if (process.env.STRIPE_SECRET_KEY) {

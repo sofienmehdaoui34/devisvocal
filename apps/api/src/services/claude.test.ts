@@ -9,7 +9,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }));
 
-import { computeTotals, buildRecapMessage, recomputeLignes, applyRecapEdit } from './claude.js';
+import { computeTotals, buildRecapMessage, recomputeLignes, applyRecapEdit, buildPriceHints } from './claude.js';
 
 const ligne = (prix: number): LigneDevis => ({
   description: 'Poste',
@@ -67,6 +67,31 @@ describe('buildRecapMessage', () => {
   it('invite à éditer une ligne en langage naturel', () => {
     const msg = buildRecapMessage(extraction, { devise: 'CHF', tvaPct: 8.1 });
     expect(msg).toContain('changer');
+  });
+});
+
+describe('buildPriceHints', () => {
+  const presta = (label: string, prix: number, unite = 'forfait', devise = 'CHF') => ({
+    label,
+    unite,
+    prix_unitaire: prix,
+    devise,
+  });
+
+  it('formate une liste compacte « label : prix devise/unité »', () => {
+    const out = buildPriceHints([presta('déplacement', 80), presta('main d’œuvre', 95, 'h')]);
+    expect(out).toContain('- déplacement : 80 CHF/forfait');
+    expect(out).toContain('- main d’œuvre : 95 CHF/h');
+  });
+
+  it('renvoie une chaîne vide si aucune prestation', () => {
+    expect(buildPriceHints([])).toBe('');
+  });
+
+  it('tronque au top-N', () => {
+    const many = Array.from({ length: 40 }, (_, i) => presta(`poste ${i}`, i + 1));
+    const out = buildPriceHints(many, 30);
+    expect(out.split('\n')).toHaveLength(30);
   });
 });
 
