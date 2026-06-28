@@ -25,6 +25,7 @@ import {
   buildRecapMessage,
   buildQuestionsMessage,
   buildPriceHints,
+  detectOmissions,
 } from '../services/claude.js';
 import { createCheckoutSession } from '../services/stripe.js';
 import { sendDevisEmail } from '../services/email.js';
@@ -316,7 +317,7 @@ async function handleRapideCollecting(
         const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF', priceHints);
         ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
         await updateSession(sessionId, 'RECAP_SENT', ctx);
-        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montantDetecte }));
+        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montantDetecte, omissions: detectOmissions(extraction.lignes, artisan.metier) }));
       } catch (err) {
         console.error('[rapide] split error (auto-montant)', err);
         ctx.rapide_step = 'montant';
@@ -351,7 +352,7 @@ async function handleRapideCollecting(
       const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF', priceHints);
       ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
       await updateSession(sessionId, 'RECAP_SENT', ctx);
-      await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant }));
+      await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant, omissions: detectOmissions(extraction.lignes, artisan.metier) }));
     } catch (err) {
       console.error('[rapide] split error', safeError(err));
       await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
@@ -503,7 +504,7 @@ async function handleRecapResponse(
         ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
         ctx.edit_round = editRound + 1;
         await updateSession(sessionId, 'RECAP_SENT', ctx);
-        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva }));
+        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, omissions: detectOmissions(extraction.lignes, artisan.metier) }));
         return;
       }
       // is_new_devis → on retombe sur le redémarrage du tunnel ci-dessous.

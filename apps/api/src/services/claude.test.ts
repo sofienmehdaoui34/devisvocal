@@ -9,7 +9,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }));
 
-import { computeTotals, buildRecapMessage, recomputeLignes, applyRecapEdit, buildPriceHints } from './claude.js';
+import { computeTotals, buildRecapMessage, recomputeLignes, applyRecapEdit, buildPriceHints, detectOmissions } from './claude.js';
 
 const ligne = (prix: number): LigneDevis => ({
   description: 'Poste',
@@ -67,6 +67,50 @@ describe('buildRecapMessage', () => {
   it('invite à éditer une ligne en langage naturel', () => {
     const msg = buildRecapMessage(extraction, { devise: 'CHF', tvaPct: 8.1 });
     expect(msg).toContain('changer');
+  });
+
+  it('affiche les oublis suggérés quand ils sont fournis', () => {
+    const msg = buildRecapMessage(extraction, { devise: 'CHF', tvaPct: 8.1, omissions: ['🚗 le déplacement'] });
+    expect(msg).toContain('Rien oublié');
+    expect(msg).toContain('le déplacement');
+  });
+
+  it('n’ajoute pas de ligne d’oublis quand il n’y en a pas', () => {
+    const msg = buildRecapMessage(extraction, { devise: 'CHF', tvaPct: 8.1 });
+    expect(msg).not.toContain('Rien oublié');
+  });
+});
+
+describe('detectOmissions', () => {
+  const l = (description: string): LigneDevis => ({
+    description,
+    quantite: 1,
+    unite: 'forfait',
+    prix_unitaire: 100,
+    total_ht: 100,
+  });
+
+  it('suggère le déplacement quand aucune ligne ne le mentionne', () => {
+    expect(detectOmissions([l('Pose carrelage')], 'carreleur')).toContain('🚗 le déplacement');
+  });
+
+  it('ne suggère pas le déplacement s’il est déjà présent', () => {
+    const out = detectOmissions([l('Pose carrelage'), l('Frais de déplacement')], 'carreleur');
+    expect(out.some((o) => o.includes('déplacement'))).toBe(false);
+  });
+
+  it('suggère les fournitures pour un métier à matériel sans poste matériel', () => {
+    expect(detectOmissions([l('Main d’œuvre')], 'plombier')).toContain('🧰 les fournitures / le matériel');
+  });
+
+  it('ne suggère pas les fournitures pour un métier sans matériel attendu', () => {
+    const out = detectOmissions([l('Prestation')], 'nettoyage');
+    expect(out.some((o) => o.includes('fournitures'))).toBe(false);
+  });
+
+  it('ne suggère pas les fournitures si un poste matériel existe', () => {
+    const out = detectOmissions([l('Fourniture et pose robinet'), l('Déplacement')], 'plombier');
+    expect(out).toHaveLength(0);
   });
 });
 

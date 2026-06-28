@@ -249,9 +249,36 @@ export function computeTotals(
   return { montant_ht, tva: tvaPct, montant_ttc };
 }
 
+// ─── Détecteur d'oublis (Jalon A1) ───────────────────────────────────────────
+// Métiers pour lesquels un poste « fournitures / matériel » est généralement attendu.
+const METIERS_AVEC_MATERIEL = new Set([
+  'plombier', 'electricien', 'carreleur', 'peintre', 'macon', 'menuisier', 'cuisiniste', 'paysagiste',
+]);
+
+/**
+ * Repère, de façon déterministe (sans appel Claude), les postes souvent oubliés
+ * dans un devis : le déplacement, et — selon le métier — les fournitures/matériel.
+ * Renvoie des libellés courts à suggérer ; vide si rien d'évident ne manque.
+ * Non-bloquant : l'artisan ajoute via l'édition (J1) ou valide tel quel.
+ */
+export function detectOmissions(lignes: LigneDevis[], metier?: string): string[] {
+  const text = (lignes ?? []).map((l) => (l.description ?? '').toLowerCase()).join(' | ');
+  const out: string[] = [];
+
+  const hasDeplacement = /d[ée]placement|frais de route|trajet|d[ée]placements/.test(text);
+  if (!hasDeplacement) out.push('🚗 le déplacement');
+
+  const hasFournitures = /fourniture|mat[ée]riel|mat[ée]riau|pi[èe]ce|consommable|achat/.test(text);
+  if (metier && METIERS_AVEC_MATERIEL.has(metier) && !hasFournitures) {
+    out.push('🧰 les fournitures / le matériel');
+  }
+
+  return out;
+}
+
 export function buildRecapMessage(
   extraction: ExtractionResult,
-  opts: { devise?: 'CHF' | 'EUR'; tvaPct?: number; montantTtcOriginal?: number } = {}
+  opts: { devise?: 'CHF' | 'EUR'; tvaPct?: number; montantTtcOriginal?: number; omissions?: string[] } = {}
 ): string {
   const devise = opts.devise ?? 'CHF';
   const tvaPct = opts.tvaPct ?? 8.1;
@@ -264,10 +291,15 @@ export function buildRecapMessage(
 
   const ttcDisplay = opts.montantTtcOriginal ?? montant_ttc;
 
+  const omissions = opts.omissions ?? [];
+  const omissionsLine = omissions.length
+    ? `\n⚠️ Rien oublié ? Pensez à : ${omissions.join(' · ')} — dites par ex. « ajoute le déplacement à 80 ».\n`
+    : '';
+
   return `📋 *Récap devis* — ${extraction.description_travaux}
 ${extraction.client_nom ? `👤 ${extraction.client_nom}\n` : ''}${lignesText}
 💰 HT *${montant_ht.toFixed(0)}* · TVA ${tva}% *${(montant_ttc - montant_ht).toFixed(0)}* · TTC *${ttcDisplay.toFixed(2)} ${devise}*${extraction.notes ? `\n📝 ${extraction.notes}` : ''}
-
+${omissionsLine}
 ✅ *OUI* = générer · ✏️ dites quoi changer (ex: « ligne 2 à 300 », « enlève le déplacement ») · *NON* = tout refaire`;
 }
 
