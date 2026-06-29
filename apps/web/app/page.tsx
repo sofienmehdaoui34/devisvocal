@@ -15,7 +15,13 @@ export default function Home() {
         >
           <span>💬</span> Démarrer sur WhatsApp
         </a>
-        <p className="text-xs text-gray-400 mt-6">SnapSolution · devisvocal.ch</p>
+        <p className="mt-6 text-sm text-gray-500">
+          Déjà client ?{' '}
+          <a href="/login" className="text-brand font-semibold hover:underline">
+            Accéder à mon espace
+          </a>
+        </p>
+        <p className="text-xs text-gray-400 mt-4">SnapSolution · devisvocal.ch</p>
       </div>
     </main>
   );
