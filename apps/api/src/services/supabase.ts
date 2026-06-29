@@ -61,6 +61,42 @@ export async function getArtisanByStripeCustomer(customerId: string): Promise<Ar
   return (data as Artisan) ?? null;
 }
 
+// ─── Espace client SaaS (Phase A) ─────────────────────────────────────────────
+
+// Artisan rattaché à un compte web (Supabase Auth).
+export async function getArtisanByAuthUserId(authUserId: string): Promise<Artisan | null> {
+  const { data, error } = await supabase
+    .from('artisans')
+    .select('*')
+    .eq('auth_user_id', authUserId)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return (data as Artisan) ?? null;
+}
+
+// Recherche par numéro (déjà normalisé par l'appelant) pour le rattachement.
+export async function findArtisanByPhone(whatsappNumber: string): Promise<Artisan | null> {
+  const { data, error } = await supabase
+    .from('artisans')
+    .select('*')
+    .eq('whatsapp_number', whatsappNumber)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return (data as Artisan) ?? null;
+}
+
+export async function setArtisanAuthUser(artisanId: string, authUserId: string): Promise<void> {
+  const { error } = await supabase
+    .from('artisans')
+    .update({ auth_user_id: authUserId, link_code: null, link_code_expires: null })
+    .eq('id', artisanId);
+  if (error) throw error;
+}
+
+export async function setLinkCode(artisanId: string, code: string, expiresIso: string): Promise<void> {
+  await updateArtisan(artisanId, { link_code: code, link_code_expires: expiresIso } as Partial<Artisan>);
+}
+
 // ─── Sessions ────────────────────────────────────────────────────────────────
 
 export async function getActiveSession(whatsappNumber: string): Promise<Session | null> {
@@ -178,6 +214,17 @@ export async function getDevisById(id: string): Promise<Devis | null> {
     .single();
   if (error && error.code !== 'PGRST116') throw error;
   return (data as Devis) ?? null;
+}
+
+// Tous les devis d'un artisan (dashboard SaaS), les plus récents d'abord.
+export async function listDevisByArtisan(artisanId: string): Promise<Devis[]> {
+  const { data, error } = await supabase
+    .from('devis')
+    .select('*')
+    .eq('artisan_id', artisanId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data as Devis[]) ?? [];
 }
 
 export async function updateDevisStatut(

@@ -5,6 +5,7 @@ import webhookTelegram from './routes/webhook-telegram.js';
 import webhookWhatsapp from './routes/webhook-whatsapp.js';
 import webhookStripe from './routes/webhook-stripe.js';
 import devisRouter from './routes/devis.js';
+import accountRouter from './routes/account.js';
 import { setWebhook } from './services/telegram.js';
 
 const app = express();
@@ -36,6 +37,7 @@ app.use((req, res, next) => {
 app.use('/webhook/telegram', webhookTelegram);
 app.use('/webhook/whatsapp', webhookWhatsapp);
 app.use('/api/devis', devisRouter);
+app.use('/api/account', accountRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
 

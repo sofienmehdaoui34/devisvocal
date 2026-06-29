@@ -86,6 +86,10 @@ export interface Artisan {
   devis_count: number;
   stripe_customer_id?: string;
   stripe_subscription_id?: string;
+  // Espace client SaaS (Phase A) — rattachement compte web ↔ fiche artisan
+  auth_user_id?: string;
+  link_code?: string;
+  link_code_expires?: string;
   created_at: string;
   updated_at: string;
 }
