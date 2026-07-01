@@ -18,7 +18,12 @@ export default function DevisPage() {
   const [devis, setDevis] = useState<Devis | null>(null);
   const [artisan, setArtisan] = useState<Artisan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isFree, setIsFree] = useState(false);
+  const [freeRemaining, setFreeRemaining] = useState(0);
   const [isPending, startTransition] = useTransition();
+
+  const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
   // Infos client (figurent sur le devis)
   const [clientNom, setClientNom] = useState('');
@@ -35,25 +40,34 @@ export default function DevisPage() {
 
   useEffect(() => {
     fetch(`${API_URL}/api/devis/${token}`)
-      .then((r) => r.json())
-      .then((data: { devis: Devis; artisan: Artisan; error?: string }) => {
-        if (data.error) {
-          setError(data.error);
-        } else {
-          setDevis(data.devis);
-          setArtisan(data.artisan);
-          // Pré-remplir les infos client déjà connues
-          setClientNom(data.devis.client_nom ?? '');
-          setClientEmail(data.devis.client_email ?? '');
-          setClientAdresse(data.devis.client_adresse ?? '');
-          setClientTel(data.devis.client_telephone ?? '');
-          // Auto-remplir le profil prestataire depuis ce qui est sauvegardé
-          setArtisanNom(data.artisan?.nom_entreprise ?? '');
-          setArtisanEmail(data.artisan?.email ?? '');
-          setArtisanTel(data.artisan?.telephone ?? '');
-          setArtisanAdresse(data.artisan?.adresse ?? '');
-          setArtisanSiret(data.artisan?.siret ?? '');
+      .then(async (r) => {
+        const data = (await r.json().catch(() => ({ error: 'Réponse invalide du serveur.' }))) as {
+          devis?: Devis;
+          artisan?: Artisan;
+          is_free?: boolean;
+          free_remaining?: number;
+          error?: string;
+        };
+        // 404 (introuvable) / 410 (expiré) renvoient un message explicite côté API.
+        if (!r.ok || data.error || !data.devis) {
+          setError(data.error ?? 'Impossible de charger le devis.');
+          return;
         }
+        setDevis(data.devis);
+        setArtisan(data.artisan ?? null);
+        setIsFree(data.is_free ?? false);
+        setFreeRemaining(data.free_remaining ?? 0);
+        // Pré-remplir les infos client déjà connues
+        setClientNom(data.devis.client_nom ?? '');
+        setClientEmail(data.devis.client_email ?? '');
+        setClientAdresse(data.devis.client_adresse ?? '');
+        setClientTel(data.devis.client_telephone ?? '');
+        // Auto-remplir le profil prestataire depuis ce qui est sauvegardé
+        setArtisanNom(data.artisan?.nom_entreprise ?? '');
+        setArtisanEmail(data.artisan?.email ?? '');
+        setArtisanTel(data.artisan?.telephone ?? '');
+        setArtisanAdresse(data.artisan?.adresse ?? '');
+        setArtisanSiret(data.artisan?.siret ?? '');
       })
       .catch(() => setError('Impossible de charger le devis.'));
   }, [token]);
@@ -66,27 +80,43 @@ export default function DevisPage() {
     null;
 
   const handlePay = () => {
+    // Validation : on ne bloque pas sur les noms (à la discrétion de l'artisan),
+    // mais on refuse un email mal formé pour éviter un échec d'envoi silencieux.
+    if (clientEmail.trim() && !isEmail(clientEmail)) {
+      setFormError('Email du client invalide.');
+      return;
+    }
+    if (artisanEmail.trim() && !isEmail(artisanEmail)) {
+      setFormError('Email professionnel invalide.');
+      return;
+    }
+    setFormError(null);
+
     startTransition(async () => {
-      const res = await fetch(`${API_URL}/api/devis/${token}/pay`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_nom: clientNom || undefined,
-          client_email: clientEmail || undefined,
-          client_adresse: clientAdresse || undefined,
-          client_telephone: clientTel || undefined,
-          artisan_nom_entreprise: artisanNom || undefined,
-          artisan_email: artisanEmail || undefined,
-          artisan_telephone: artisanTel || undefined,
-          artisan_adresse: artisanAdresse || undefined,
-          artisan_siret: artisanSiret || undefined,
-        }),
-      });
-      const data = await res.json() as { url?: string; error?: string };
-      if (data.url) {
+      try {
+        const res = await fetch(`${API_URL}/api/devis/${token}/pay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_nom: clientNom || undefined,
+            client_email: clientEmail || undefined,
+            client_adresse: clientAdresse || undefined,
+            client_telephone: clientTel || undefined,
+            artisan_nom_entreprise: artisanNom || undefined,
+            artisan_email: artisanEmail || undefined,
+            artisan_telephone: artisanTel || undefined,
+            artisan_adresse: artisanAdresse || undefined,
+            artisan_siret: artisanSiret || undefined,
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string; free?: boolean };
+        if (!res.ok || !data.url) {
+          setFormError(data.error ?? 'Erreur lors du paiement. Réessayez.');
+          return;
+        }
         window.location.href = data.url;
-      } else {
-        setError(data.error ?? 'Erreur lors du paiement.');
+      } catch {
+        setFormError('Erreur réseau. Vérifiez votre connexion et réessayez.');
       }
     });
   };
@@ -94,8 +124,8 @@ export default function DevisPage() {
   if (error) {
     return (
       <main className="min-h-screen flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow p-8 max-w-md text-center">
-          <div className="text-4xl mb-4">⚠️</div>
+        <div className="bg-white rounded-2xl shadow p-8 max-w-md text-center" role="alert">
+          <div className="text-4xl mb-4" aria-hidden="true">⚠️</div>
           <h1 className="text-xl font-bold text-gray-900 mb-2">Lien invalide</h1>
           <p className="text-gray-500">{error}</p>
         </div>
@@ -147,6 +177,20 @@ export default function DevisPage() {
           </div>
         )}
 
+        {/* Devis offert */}
+        {!isPaid && !isExpired && isFree && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <span className="text-2xl">🎁</span>
+            <div>
+              <p className="font-semibold text-emerald-800">Devis offert</p>
+              <p className="text-emerald-600 text-sm">
+                Vos {freeRemaining} premier{freeRemaining > 1 ? 's' : ''} devis{' '}
+                {freeRemaining > 1 ? 'sont gratuits' : 'est gratuit'} — celui-ci est inclus.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Expiré */}
         {isExpired && !isPaid && (
           <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 flex items-center gap-3">
@@ -162,7 +206,7 @@ export default function DevisPage() {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-6">
 
           {/* Parties */}
-          <div className="grid grid-cols-2 gap-4 p-6 border-b border-gray-100">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-6 border-b border-gray-100">
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Prestataire</p>
               <p className="font-semibold text-gray-900">{artisan?.nom_entreprise ?? '—'}</p>
@@ -182,14 +226,11 @@ export default function DevisPage() {
             </div>
           )}
 
-          {/* Lignes — floutées tant que le devis n'est pas payé */}
+          {/* Lignes — APERÇU : structure visible, prix masqués tant que non payé.
+              On montre la réalité du devis (postes, quantités) pour rassurer,
+              tout en gardant la valeur (prix) derrière le paiement + filigrane. */}
           <div className="relative">
-            <div
-              className={`overflow-x-auto transition ${
-                !isPaid ? 'blur-sm select-none pointer-events-none' : ''
-              }`}
-              aria-hidden={!isPaid}
-            >
+            <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
@@ -206,31 +247,42 @@ export default function DevisPage() {
                       <td className="px-6 py-4 text-gray-900">{ligne.description}</td>
                       <td className="px-4 py-4 text-center text-gray-600">{ligne.quantite}</td>
                       <td className="px-4 py-4 text-center text-gray-600">{ligne.unite}</td>
-                      <td className="px-4 py-4 text-right text-gray-600">{fmt(ligne.prix_unitaire)}</td>
-                      <td className="px-6 py-4 text-right font-semibold text-gray-900">{fmt(ligne.total_ht)}</td>
+                      <td className="px-4 py-4 text-right text-gray-600">
+                        {isPaid ? fmt(ligne.prix_unitaire) : <span className="text-gray-300">🔒</span>}
+                      </td>
+                      <td className="px-6 py-4 text-right font-semibold text-gray-900">
+                        {isPaid ? fmt(ligne.total_ht) : <span className="text-gray-300">🔒</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
 
-            {/* Overlay cadenas — masque le détail tant que !isPaid */}
+            {/* Filigrane « APERÇU » tant que le devis n'est pas payé */}
             {!isPaid && (
-              <div className="absolute inset-0 flex items-center justify-center bg-white/30">
-                <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-6 py-5 text-center max-w-xs mx-4">
-                  <div className="text-3xl mb-2">🔒</div>
-                  <p className="font-bold text-gray-900">Détail du devis verrouillé</p>
-                  <p className="text-gray-500 text-sm mt-1">
-                    {devis.lignes_json.length} poste{devis.lignes_json.length > 1 ? 's' : ''} · Total
-                    visible ci-dessous
-                  </p>
-                  <p className="text-brand text-sm font-semibold mt-2">
-                    Payez 2.90 CHF pour débloquer le détail et le PDF
-                  </p>
-                </div>
+              <div
+                className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden"
+                aria-hidden="true"
+              >
+                <span className="select-none rotate-[-20deg] text-5xl sm:text-7xl font-black tracking-widest text-gray-900/10">
+                  APERÇU
+                </span>
               </div>
             )}
           </div>
+
+          {/* Bandeau d'explication de l'aperçu */}
+          {!isPaid && (
+            <div className="border-t border-amber-100 bg-amber-50 px-6 py-3 text-center">
+              <p className="text-sm text-amber-700">
+                👀 Aperçu du devis —{' '}
+                {isFree
+                  ? 'génération offerte, prix + PDF débloqués à la validation'
+                  : 'les prix unitaires et le PDF se débloquent au paiement'}
+              </p>
+            </div>
+          )}
 
           {/* Totaux — détail HT/TVA masqué tant que !isPaid, TTC toujours visible */}
           <div className="border-t border-gray-100 px-6 py-4 space-y-2">
@@ -261,7 +313,9 @@ export default function DevisPage() {
         {/* Zone paiement */}
         {!isPaid && !isExpired && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
-            <h2 className="font-bold text-gray-900 text-lg">Télécharger le PDF — 2.90 CHF</h2>
+            <h2 className="font-bold text-gray-900 text-lg">
+              {isFree ? '🎁 Générer le PDF — Offert' : 'Télécharger le PDF — 2.90 CHF'}
+            </h2>
 
             {/* ── Prestataire — auto-rempli depuis le profil sauvegardé ── */}
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-3">
@@ -275,6 +329,7 @@ export default function DevisPage() {
                   </label>
                   <input
                     type="text"
+                    aria-label="Nom ou entreprise du prestataire"
                     value={artisanNom}
                     onChange={(e) => setArtisanNom(e.target.value)}
                     placeholder="Plomberie Dupont"
@@ -285,6 +340,7 @@ export default function DevisPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">Email pro</label>
                   <input
                     type="email"
+                    aria-label="Email professionnel"
                     value={artisanEmail}
                     onChange={(e) => setArtisanEmail(e.target.value)}
                     placeholder="contact@plomberie-dupont.ch"
@@ -295,6 +351,7 @@ export default function DevisPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">Téléphone</label>
                   <input
                     type="tel"
+                    aria-label="Téléphone du prestataire"
                     value={artisanTel}
                     onChange={(e) => setArtisanTel(e.target.value)}
                     placeholder="+41 79 123 45 67"
@@ -305,6 +362,7 @@ export default function DevisPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">Adresse</label>
                   <input
                     type="text"
+                    aria-label="Adresse du prestataire"
                     value={artisanAdresse}
                     onChange={(e) => setArtisanAdresse(e.target.value)}
                     placeholder="Rue des Artisans 12, 1201 Genève"
@@ -315,6 +373,7 @@ export default function DevisPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">N° IDE / TVA (optionnel)</label>
                   <input
                     type="text"
+                    aria-label="Numéro IDE ou TVA (optionnel)"
                     value={artisanSiret}
                     onChange={(e) => setArtisanSiret(e.target.value)}
                     placeholder="CHE-123.456.789"
@@ -335,6 +394,7 @@ export default function DevisPage() {
                   </label>
                   <input
                     type="text"
+                    aria-label="Nom du client"
                     value={clientNom}
                     onChange={(e) => setClientNom(e.target.value)}
                     placeholder="M. Martin / Société X"
@@ -345,6 +405,7 @@ export default function DevisPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">Téléphone</label>
                   <input
                     type="tel"
+                    aria-label="Téléphone du client"
                     value={clientTel}
                     onChange={(e) => setClientTel(e.target.value)}
                     placeholder="+41 78 000 00 00"
@@ -355,6 +416,7 @@ export default function DevisPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">Adresse du client</label>
                   <input
                     type="text"
+                    aria-label="Adresse du client"
                     value={clientAdresse}
                     onChange={(e) => setClientAdresse(e.target.value)}
                     placeholder="Rue du Lac 5, 1207 Genève"
@@ -367,6 +429,7 @@ export default function DevisPage() {
                   </label>
                   <input
                     type="email"
+                    aria-label="Email du client (pour recevoir le PDF)"
                     value={clientEmail}
                     onChange={(e) => setClientEmail(e.target.value)}
                     placeholder="client@exemple.com"
@@ -382,24 +445,35 @@ export default function DevisPage() {
               </p>
             )}
 
+            {formError && (
+              <p className="text-sm text-red-600 text-center" role="alert">
+                ⚠️ {formError}
+              </p>
+            )}
+
             <button
               onClick={handlePay}
               disabled={isPending}
+              aria-busy={isPending}
               className="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-3.5 rounded-xl transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isPending ? (
                 <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-                  Redirection...
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" aria-hidden="true" />
+                  {isFree ? 'Génération...' : 'Redirection...'}
                 </>
+              ) : isFree ? (
+                <>🎁 Générer mon devis gratuitement</>
               ) : (
                 <>💳 Payer 2.90 CHF et télécharger</>
               )}
             </button>
 
-            <p className="text-xs text-gray-400 text-center">
-              Paiement sécurisé par Stripe · CB, Apple Pay, Google Pay
-            </p>
+            {!isFree && (
+              <p className="text-xs text-gray-400 text-center">
+                Paiement sécurisé par Stripe · CB, Apple Pay, Google Pay
+              </p>
+            )}
           </div>
         )}
 

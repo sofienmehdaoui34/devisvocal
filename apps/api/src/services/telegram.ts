@@ -1,15 +1,21 @@
 import axios from 'axios';
+import { withRetry } from '../utils/retry.js';
 
 const BASE = () => `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+const HTTP_TIMEOUT_MS = 30_000;
 
 // ─── Envoi texte ─────────────────────────────────────────────────────────────
 
 export async function sendText(chatId: string, text: string): Promise<void> {
-  await axios.post(`${BASE()}/sendMessage`, {
-    chat_id: chatId,
-    text,
-    parse_mode: 'Markdown',
-  });
+  await withRetry(
+    () =>
+      axios.post(
+        `${BASE()}/sendMessage`,
+        { chat_id: chatId, text, parse_mode: 'Markdown' },
+        { timeout: HTTP_TIMEOUT_MS }
+      ),
+    { retries: 2, label: 'telegram.sendText' }
+  );
 }
 
 // ─── Envoi document (PDF) ─────────────────────────────────────────────────────
@@ -17,39 +23,56 @@ export async function sendText(chatId: string, text: string): Promise<void> {
 export async function sendDocument(
   chatId: string,
   documentUrl: string,
-  filename: string,
+  _filename: string,
   caption?: string
 ): Promise<void> {
-  await axios.post(`${BASE()}/sendDocument`, {
-    chat_id: chatId,
-    document: documentUrl,
-    caption: caption ?? '',
-    parse_mode: 'Markdown',
-  });
+  await withRetry(
+    () =>
+      axios.post(
+        `${BASE()}/sendDocument`,
+        { chat_id: chatId, document: documentUrl, caption: caption ?? '', parse_mode: 'Markdown' },
+        { timeout: HTTP_TIMEOUT_MS }
+      ),
+    { retries: 2, label: 'telegram.sendDocument' }
+  );
 }
 
 // ─── Téléchargement fichier audio depuis Telegram ────────────────────────────
 
 export async function getMediaUrl(fileId: string): Promise<string> {
-  const res = await axios.get<{ ok: boolean; result: { file_path: string } }>(
-    `${BASE()}/getFile`,
-    { params: { file_id: fileId } }
+  const res = await withRetry(
+    () =>
+      axios.get<{ ok: boolean; result: { file_path: string } }>(`${BASE()}/getFile`, {
+        params: { file_id: fileId },
+        timeout: HTTP_TIMEOUT_MS,
+      }),
+    { retries: 2, label: 'telegram.getFile' }
   );
   const filePath = res.data.result.file_path;
   return `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
 }
 
 export async function downloadMedia(mediaUrl: string): Promise<Buffer> {
-  const res = await axios.get<ArrayBuffer>(mediaUrl, { responseType: 'arraybuffer' });
+  const res = await withRetry(
+    () => axios.get<ArrayBuffer>(mediaUrl, { responseType: 'arraybuffer', timeout: HTTP_TIMEOUT_MS }),
+    { retries: 2, label: 'telegram.downloadMedia' }
+  );
   return Buffer.from(res.data);
 }
 
 // ─── Configurer le webhook Telegram ──────────────────────────────────────────
 
 export async function setWebhook(webhookUrl: string): Promise<void> {
+  // Le secret est renvoyé par Telegram dans l'en-tête
+  // X-Telegram-Bot-Api-Secret-Token à chaque update (vérifié côté webhook).
+  const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
   const res = await axios.post<{ ok: boolean; description: string }>(
     `${BASE()}/setWebhook`,
-    { url: webhookUrl, allowed_updates: ['message'] }
+    {
+      url: webhookUrl,
+      allowed_updates: ['message'],
+      ...(secretToken ? { secret_token: secretToken } : {}),
+    }
   );
   console.log('✅ Telegram webhook set:', res.data);
 }

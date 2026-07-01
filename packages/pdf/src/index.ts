@@ -1,6 +1,21 @@
 import puppeteer from 'puppeteer';
 import type { Devis, Artisan, LigneDevis } from '@devisvocal/types';
 
+/**
+ * Échappe les caractères HTML sensibles pour éviter toute injection (XSS) via
+ * des données saisies par l'utilisateur (nom d'entreprise, client, description…)
+ * lorsqu'elles sont interpolées dans le template HTML du PDF ou des emails.
+ */
+export function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Devise dérivée du taux de TVA : 8.1% = Suisse (CHF), sinon Europe (EUR).
 const deviseFromTva = (tva: number): 'CHF' | 'EUR' => (tva >= 15 ? 'EUR' : 'CHF');
 
@@ -20,9 +35,9 @@ function buildHtml(devis: Devis, artisan: Artisan): string {
     .map(
       (l: LigneDevis, i: number) => `
       <tr class="${i % 2 === 0 ? 'even' : 'odd'}">
-        <td class="desc">${l.description}</td>
-        <td class="center">${l.quantite}</td>
-        <td class="center">${l.unite}</td>
+        <td class="desc">${escapeHtml(l.description)}</td>
+        <td class="center">${escapeHtml(l.quantite)}</td>
+        <td class="center">${escapeHtml(l.unite)}</td>
         <td class="right">${fmt(l.prix_unitaire)}</td>
         <td class="right bold">${fmt(l.total_ht)}</td>
       </tr>`
@@ -86,17 +101,17 @@ function buildHtml(devis: Devis, artisan: Artisan): string {
 
 <div class="header">
   <div>
-    <div class="company-name">${artisan.nom_entreprise ?? 'Mon Entreprise'}</div>
+    <div class="company-name">${escapeHtml(artisan.nom_entreprise ?? 'Mon Entreprise')}</div>
     <div class="company-info">
-      ${artisan.adresse ? `${artisan.adresse}<br>` : ''}
-      ${artisan.telephone ? `Tél : ${artisan.telephone}<br>` : ''}
-      ${artisan.email ? `${artisan.email}<br>` : ''}
-      ${artisan.siret ? `${ideLabel} : ${artisan.siret}` : ''}
+      ${artisan.adresse ? `${escapeHtml(artisan.adresse)}<br>` : ''}
+      ${artisan.telephone ? `Tél : ${escapeHtml(artisan.telephone)}<br>` : ''}
+      ${artisan.email ? `${escapeHtml(artisan.email)}<br>` : ''}
+      ${artisan.siret ? `${ideLabel} : ${escapeHtml(artisan.siret)}` : ''}
     </div>
   </div>
   <div class="devis-title">
     <h1>DEVIS</h1>
-    <div class="numero">${devis.numero}</div>
+    <div class="numero">${escapeHtml(devis.numero)}</div>
     <div class="date">Émis le ${dateEmission}</div>
     <div class="date">Valable jusqu'au ${dateValidite}</div>
   </div>
@@ -107,27 +122,27 @@ function buildHtml(devis: Devis, artisan: Artisan): string {
 <div class="parties">
   <div class="partie">
     <div class="partie-label">Prestataire</div>
-    <div class="partie-name">${artisan.nom_entreprise ?? ''}</div>
+    <div class="partie-name">${escapeHtml(artisan.nom_entreprise ?? '')}</div>
     <div class="partie-detail">
-      ${artisan.adresse ? `${artisan.adresse}<br>` : ''}
-      ${artisan.telephone ? `${artisan.telephone}<br>` : ''}
-      ${artisan.email ?? ''}
+      ${artisan.adresse ? `${escapeHtml(artisan.adresse)}<br>` : ''}
+      ${artisan.telephone ? `${escapeHtml(artisan.telephone)}<br>` : ''}
+      ${escapeHtml(artisan.email ?? '')}
     </div>
   </div>
   <div class="partie">
     <div class="partie-label">Client</div>
-    <div class="partie-name">${devis.client_nom ?? 'À compléter'}</div>
+    <div class="partie-name">${escapeHtml(devis.client_nom ?? 'À compléter')}</div>
     <div class="partie-detail">
-      ${devis.client_adresse ? `${devis.client_adresse}<br>` : ''}
-      ${devis.client_telephone ? `${devis.client_telephone}<br>` : ''}
-      ${devis.client_email ?? ''}
+      ${devis.client_adresse ? `${escapeHtml(devis.client_adresse)}<br>` : ''}
+      ${devis.client_telephone ? `${escapeHtml(devis.client_telephone)}<br>` : ''}
+      ${escapeHtml(devis.client_email ?? '')}
     </div>
   </div>
 </div>
 
 ${devis.travaux_description ? `
 <div class="section-label">Objet du devis</div>
-<div class="travaux-desc">${devis.travaux_description}</div>
+<div class="travaux-desc">${escapeHtml(devis.travaux_description)}</div>
 ` : ''}
 
 <table>
@@ -181,7 +196,7 @@ ${devis.travaux_description ? `
 
 <div class="footer">
   <span>Généré par DevisVocal — SnapSolution</span>
-  <span>${devis.numero} · ${dateEmission}</span>
+  <span>${escapeHtml(devis.numero)} · ${dateEmission}</span>
 </div>
 
 </body>
@@ -191,12 +206,16 @@ ${devis.travaux_description ? `
 export async function generateDevisPdf(devis: Devis, artisan: Artisan): Promise<Buffer> {
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    timeout: 30_000,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   });
 
+  let page;
   try {
-    const page = await browser.newPage();
-    await page.setContent(buildHtml(devis, artisan), { waitUntil: 'networkidle0' });
+    page = await browser.newPage();
+    // Le template est 100% inline (pas de ressources réseau) : networkidle2
+    // suffit et évite les timeouts inutiles de networkidle0 sur réseau lent.
+    await page.setContent(buildHtml(devis, artisan), { waitUntil: 'networkidle2', timeout: 30_000 });
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -204,6 +223,7 @@ export async function generateDevisPdf(devis: Devis, artisan: Artisan): Promise<
     });
     return Buffer.from(pdf);
   } finally {
-    await browser.close();
+    if (page) await page.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }

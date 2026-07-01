@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import type { Devis, Artisan } from '@devisvocal/types';
+import { escapeHtml } from '@devisvocal/pdf';
 import { safeError } from '../utils/errors.js';
 
 // Lazy init — retourne null si la clé n'est pas configurée
@@ -76,13 +77,13 @@ function artisanEmailHtml(devis: Devis, artisan: Artisan): string {
 </div>
 <div class="body">
   <div class="badge">✅ Devis payé</div>
-  <h3>Bonjour ${artisan.nom_entreprise ?? ''} !</h3>
-  <p>Votre devis <strong>${devis.numero}</strong> a été payé et généré avec succès.</p>
+  <h3>Bonjour ${escapeHtml(artisan.nom_entreprise ?? '')} !</h3>
+  <p>Votre devis <strong>${escapeHtml(devis.numero)}</strong> a été payé et généré avec succès.</p>
   <p>Vous trouverez le PDF en pièce jointe à cet email.</p>
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0">
   <p><strong>Montant HT :</strong> CHF ${devis.montant_ht.toFixed(2)}</p>
   <p><strong>Montant TTC :</strong> CHF ${devis.montant_ttc.toFixed(2)}</p>
-  <p><strong>Client :</strong> ${devis.client_nom ?? 'Non renseigné'}</p>
+  <p><strong>Client :</strong> ${escapeHtml(devis.client_nom ?? 'Non renseigné')}</p>
   <div class="footer">DevisVocal by SnapSolution — devisvocal.ch</div>
 </div>
 </body></html>`;
@@ -97,11 +98,11 @@ function clientEmailHtml(devis: Devis, artisan: Artisan): string {
 .footer{color:#9ca3af;font-size:11px;margin-top:24px;text-align:center}</style>
 </head><body>
 <div class="header">
-  <h2 style="margin:0">Devis de ${artisan.nom_entreprise ?? 'votre prestataire'}</h2>
+  <h2 style="margin:0">Devis de ${escapeHtml(artisan.nom_entreprise ?? 'votre prestataire')}</h2>
 </div>
 <div class="body">
-  <p>Bonjour ${devis.client_nom ?? ''},</p>
-  <p>Veuillez trouver ci-joint votre devis <strong>${devis.numero}</strong>.</p>
+  <p>Bonjour ${escapeHtml(devis.client_nom ?? '')},</p>
+  <p>Veuillez trouver ci-joint votre devis <strong>${escapeHtml(devis.numero)}</strong>.</p>
   <p>N'hésitez pas à contacter votre prestataire pour toute question.</p>
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0">
   <p><strong>Montant TTC :</strong> CHF ${devis.montant_ttc.toFixed(2)}</p>

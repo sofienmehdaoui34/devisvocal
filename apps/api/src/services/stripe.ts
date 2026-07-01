@@ -2,6 +2,8 @@ import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2024-06-20',
+  timeout: 30_000, // 30s par requête
+  maxNetworkRetries: 2, // backoff intégré du SDK sur erreurs réseau
 });
 
 const PRIX_DEVIS_CHF = parseFloat(process.env.STRIPE_PRICE_DEVIS ?? '2.90');
@@ -58,11 +60,17 @@ export async function createOrGetStripeCustomer(
   const existing = await stripe.customers.list({ email, limit: 1 });
   if (existing.data.length > 0) return existing.data[0].id;
 
-  const customer = await stripe.customers.create({
-    email,
-    name: nomEntreprise,
-    metadata: { whatsapp_number: whatsappNumber },
-  });
+  // Race bénigne (check-then-create) : deux requêtes concurrentes pour le même
+  // email pourraient créer deux clients. La clé d'idempotence basée sur l'email
+  // garantit qu'une même requête rejouée ne crée pas de doublon.
+  const customer = await stripe.customers.create(
+    {
+      email,
+      name: nomEntreprise,
+      metadata: { whatsapp_number: whatsappNumber },
+    },
+    { idempotencyKey: `customer_${email}` }
+  );
   return customer.id;
 }
 

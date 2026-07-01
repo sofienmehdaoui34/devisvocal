@@ -2,13 +2,17 @@ import OpenAI from 'openai';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { withRetry, withTimeout } from '../utils/retry.js';
+
+const WHISPER_TIMEOUT_MS = 60_000; // l'audio peut être long
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!_openai) {
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error('OPENAI_API_KEY manquant — transcription vocale désactivée');
-    _openai = new OpenAI({ apiKey: key });
+    // maxRetries: 0 → backoff géré par withRetry.
+    _openai = new OpenAI({ apiKey: key, maxRetries: 0 });
   }
   return _openai;
 }
@@ -37,11 +41,20 @@ export async function transcribeAudioBuffer(
 
   fs.writeFileSync(tmpFile, buffer);
   try {
-    const transcription = await openai.audio.transcriptions.create({
-      file:     fs.createReadStream(tmpFile),
-      model:    'whisper-1',
-      language: 'fr',
-    });
+    const transcription = await withRetry(
+      () =>
+        withTimeout(
+          openai.audio.transcriptions.create({
+            // createReadStream à chaque tentative : un stream consommé n'est pas réutilisable.
+            file:     fs.createReadStream(tmpFile),
+            model:    'whisper-1',
+            language: 'fr',
+          }),
+          WHISPER_TIMEOUT_MS,
+          'Whisper transcription'
+        ),
+      { retries: 2, label: 'whisper' }
+    );
     return transcription.text;
   } finally {
     try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }

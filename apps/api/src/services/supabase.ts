@@ -1,10 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Artisan, Client, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut } from '@devisvocal/types';
+import type { Artisan, Client, Session, Devis, SessionState, SessionContext, LigneDevis, DevisStatut, Prestation } from '@devisvocal/types';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL ?? 'https://placeholder.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? 'placeholder'
-);
+// Pas de fallback "placeholder" : on échoue clairement plutôt que de se
+// connecter silencieusement à une fausse instance (cf. config.ts qui valide
+// déjà ces variables au démarrage).
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY sont requis');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 export { supabase };
 
@@ -53,6 +59,42 @@ export async function getArtisanByStripeCustomer(customerId: string): Promise<Ar
     .single();
   if (error && error.code !== 'PGRST116') throw error;
   return (data as Artisan) ?? null;
+}
+
+// ─── Espace client SaaS (Phase A) ─────────────────────────────────────────────
+
+// Artisan rattaché à un compte web (Supabase Auth).
+export async function getArtisanByAuthUserId(authUserId: string): Promise<Artisan | null> {
+  const { data, error } = await supabase
+    .from('artisans')
+    .select('*')
+    .eq('auth_user_id', authUserId)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return (data as Artisan) ?? null;
+}
+
+// Recherche par numéro (déjà normalisé par l'appelant) pour le rattachement.
+export async function findArtisanByPhone(whatsappNumber: string): Promise<Artisan | null> {
+  const { data, error } = await supabase
+    .from('artisans')
+    .select('*')
+    .eq('whatsapp_number', whatsappNumber)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return (data as Artisan) ?? null;
+}
+
+export async function setArtisanAuthUser(artisanId: string, authUserId: string): Promise<void> {
+  const { error } = await supabase
+    .from('artisans')
+    .update({ auth_user_id: authUserId, link_code: null, link_code_expires: null })
+    .eq('id', artisanId);
+  if (error) throw error;
+}
+
+export async function setLinkCode(artisanId: string, code: string, expiresIso: string): Promise<void> {
+  await updateArtisan(artisanId, { link_code: code, link_code_expires: expiresIso } as Partial<Artisan>);
 }
 
 // ─── Sessions ────────────────────────────────────────────────────────────────
@@ -174,6 +216,17 @@ export async function getDevisById(id: string): Promise<Devis | null> {
   return (data as Devis) ?? null;
 }
 
+// Tous les devis d'un artisan (dashboard SaaS), les plus récents d'abord.
+export async function listDevisByArtisan(artisanId: string): Promise<Devis[]> {
+  const { data, error } = await supabase
+    .from('devis')
+    .select('*')
+    .eq('artisan_id', artisanId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data as Devis[]) ?? [];
+}
+
 export async function updateDevisStatut(
   id: string,
   statut: DevisStatut,
@@ -254,6 +307,81 @@ export async function listClients(artisanId: string): Promise<Client[]> {
     .order('updated_at', { ascending: false });
   if (error) throw error;
   return (data as Client[]) ?? [];
+}
+
+// ─── Prestations (bibliothèque de prix par artisan) ──────────────────────────
+
+// Normalise un libellé de prestation pour le rapprochement (clé d'unicité) :
+// minuscule, trim, espaces multiples compactés.
+export function normalizePrestationLabel(label: string): string {
+  return (label ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Transforme les lignes d'un devis en prestations à mémoriser : on normalise le
+// libellé, on ignore les lignes sans prix, et on dédoublonne par (label, unité)
+// en gardant la dernière occurrence (l'artisan vient de valider ces prix).
+export function lignesToPrestations(
+  lignes: LigneDevis[],
+  devise: 'CHF' | 'EUR'
+): Array<{ label: string; unite: string; prix_unitaire: number; devise: 'CHF' | 'EUR' }> {
+  const seen = new Map<string, { label: string; unite: string; prix_unitaire: number; devise: 'CHF' | 'EUR' }>();
+  for (const l of lignes ?? []) {
+    const label = normalizePrestationLabel(l.description);
+    const unite = (l.unite ?? '').trim();
+    if (!label || !unite || !(l.prix_unitaire > 0)) continue;
+    seen.set(`${label}|${unite}`, { label, unite, prix_unitaire: l.prix_unitaire, devise });
+  }
+  return [...seen.values()];
+}
+
+// Retourne les prestations connues d'un artisan, les plus utilisées d'abord.
+export async function listPrestations(artisanId: string, limit = 50): Promise<Prestation[]> {
+  const { data, error } = await supabase
+    .from('prestations')
+    .select('*')
+    .eq('artisan_id', artisanId)
+    .order('usage_count', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as Prestation[]) ?? [];
+}
+
+// Mémorise (upsert) les prestations issues d'un devis validé : incrémente
+// usage_count et met à jour le prix si la prestation existe déjà, sinon l'insère.
+// Best-effort par ligne : une ligne en échec n'empêche pas les autres.
+export async function rememberPrestations(
+  artisanId: string,
+  lignes: LigneDevis[],
+  devise: 'CHF' | 'EUR'
+): Promise<void> {
+  const rows = lignesToPrestations(lignes, devise);
+  for (const r of rows) {
+    try {
+      const { data: existing, error } = await supabase
+        .from('prestations')
+        .select('id, usage_count')
+        .eq('artisan_id', artisanId)
+        .eq('label', r.label)
+        .eq('unite', r.unite)
+        .eq('devise', r.devise)
+        .single();
+      if (error && error.code !== 'PGRST116') throw error;
+
+      const now = new Date().toISOString();
+      if (existing) {
+        await supabase
+          .from('prestations')
+          .update({ prix_unitaire: r.prix_unitaire, usage_count: (existing.usage_count ?? 0) + 1, last_used_at: now })
+          .eq('id', existing.id);
+      } else {
+        await supabase
+          .from('prestations')
+          .insert({ artisan_id: artisanId, ...r, usage_count: 1, last_used_at: now });
+      }
+    } catch (e) {
+      console.warn('[prestations] upsert error (non-bloquant):', e);
+    }
+  }
 }
 
 // ─── Supabase Storage (PDF) ───────────────────────────────────────────────────

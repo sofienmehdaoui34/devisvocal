@@ -1,4 +1,4 @@
-import type { Artisan, WhatsAppInboundMessage, SessionContext } from '@devisvocal/types';
+import type { Artisan, Devis, WhatsAppInboundMessage, SessionContext, ExtractionResult } from '@devisvocal/types';
 import type { Channel } from '../services/channel.js';
 import {
   findOrCreateArtisan,
@@ -12,15 +12,20 @@ import {
   uploadPdf,
   findClientByName,
   upsertClient,
+  listPrestations,
+  rememberPrestations,
 } from '../services/supabase.js';
 import { MSG } from '../services/telegram.js';
 import { transcribeAudioBuffer } from '../services/whisper.js';
 import {
   extractDevisFromText,
   splitMontantEnLignes,
+  applyRecapEdit,
   computeTotals,
   buildRecapMessage,
   buildQuestionsMessage,
+  buildPriceHints,
+  detectOmissions,
 } from '../services/claude.js';
 import { createCheckoutSession } from '../services/stripe.js';
 import { sendDevisEmail } from '../services/email.js';
@@ -30,6 +35,7 @@ import { generateDevisPdf } from '@devisvocal/pdf';
 
 const APP_URL = process.env.APP_URL ?? 'https://app.devisvocal.ch';
 const MAX_CLARIFICATION_ROUNDS = 2;
+const MAX_EDIT_ROUNDS = 5; // garde-fou coût : retouches conversationnelles du récap
 
 // Construit le bon canal (WhatsApp si numéro E.164 avec "+", Telegram sinon)
 async function channelFromNumber(number: string): Promise<Channel> {
@@ -55,8 +61,22 @@ function normText(text: string): string {
   return text.trim().toUpperCase();
 }
 
+// Charge les tarifs habituels de l'artisan (filtrés par devise) pour les injecter
+// dans l'extraction Claude. Best-effort : renvoie undefined si vide ou en erreur.
+async function loadPriceHints(artisanId: string, devise?: 'CHF' | 'EUR'): Promise<string | undefined> {
+  try {
+    const prestations = await listPrestations(artisanId, 50);
+    const filtered = devise ? prestations.filter((p) => p.devise === devise) : prestations;
+    const hints = buildPriceHints(filtered, 30);
+    return hints || undefined;
+  } catch (err) {
+    console.warn('[prestations] chargement des tarifs échoué (non-bloquant):', safeError(err));
+    return undefined;
+  }
+}
+
 // Devise + TVA selon préfixe du numéro de téléphone
-function getDevise(from: string): { devise: string; tva: number } {
+export function getDevise(from: string): { devise: string; tva: number } {
   if (from.startsWith('+33') || from.startsWith('0033')) return { devise: 'EUR', tva: 20 };
   if (from.startsWith('+32') || from.startsWith('0032')) return { devise: 'EUR', tva: 21 };
   return { devise: 'CHF', tva: 8.1 }; // Suisse par défaut
@@ -65,7 +85,7 @@ function getDevise(from: string): { devise: string; tva: number } {
 // Détecte une demande explicite de changement de devise dans le chat.
 // Ex: "mets-le en CHF", "plutôt en euros", "en francs suisses", "facture en EUR".
 // Renvoie null si aucune intention claire (pour ne pas confondre avec "5000 CHF").
-function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number } | null {
+export function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number } | null {
   const t = text.toLowerCase();
   const hasChf = /\b(chf|francs?\s*suisses?|francs?\s*ch)\b/.test(t);
   const hasEur = /(\beuros?\b|\beur\b|€)/.test(t);
@@ -85,7 +105,7 @@ function detectDeviseIntent(text: string): { devise: 'CHF' | 'EUR'; tva: number 
 
 // Détection du métier depuis la description des travaux
 import type { Metier } from '@devisvocal/types';
-function inferMetier(description: string): Metier | null {
+export function inferMetier(description: string): Metier | null {
   const d = description.toLowerCase();
   if (/plomb|chaudière|chauffage|sanitaire|robinet|canalisation|wc|douche/.test(d)) return 'plombier';
   if (/électr|câbl|tableau|prise|disjoncteur|éclairage|interrupteur/.test(d))       return 'electricien';
@@ -293,10 +313,11 @@ async function handleRapideCollecting(
       await updateSession(sessionId, 'RAPIDE_COLLECTING', ctx);
       await channel.sendText(from, MSG.rapide_analyse());
       try {
-        const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF');
+        const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+        const extraction = await splitMontantEnLignes(description, montantDetecte, ctx.devise ?? 'CHF', priceHints);
         ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
         await updateSession(sessionId, 'RECAP_SENT', ctx);
-        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montantDetecte }));
+        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montantDetecte, omissions: detectOmissions(extraction.lignes, artisan.metier) }));
       } catch (err) {
         console.error('[rapide] split error (auto-montant)', err);
         ctx.rapide_step = 'montant';
@@ -327,10 +348,11 @@ async function handleRapideCollecting(
     await channel.sendText(from, MSG.rapide_analyse());
 
     try {
-      const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF');
+      const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+      const extraction = await splitMontantEnLignes(ctx.rapide_description ?? '', montant, ctx.devise ?? 'CHF', priceHints);
       ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
       await updateSession(sessionId, 'RECAP_SENT', ctx);
-      await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant }));
+      await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, montantTtcOriginal: montant, omissions: detectOmissions(extraction.lignes, artisan.metier) }));
     } catch (err) {
       console.error('[rapide] split error', safeError(err));
       await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
@@ -357,7 +379,8 @@ async function handleAssisteCollecting(
   await updateSession(sessionId, 'ASSISTE_COLLECTING', ctx);
 
   try {
-    const extraction = await extractDevisFromText(ctx.description_brute, artisan.metier ?? 'autre');
+    const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+    const extraction = await extractDevisFromText(ctx.description_brute, artisan.metier ?? 'autre', priceHints);
 
     if (extraction.questions_manquantes.length > 0 && ctx.clarification_round < MAX_CLARIFICATION_ROUNDS) {
       ctx.questions_restantes = extraction.questions_manquantes;
@@ -400,7 +423,8 @@ async function handleClarifying(
   await updateSession(sessionId, 'CLARIFYING', ctx);
 
   try {
-    const extraction = await extractDevisFromText(ctx.description_brute ?? text, artisan.metier ?? 'autre');
+    const priceHints = await loadPriceHints(artisan.id, ctx.devise);
+    const extraction = await extractDevisFromText(ctx.description_brute ?? text, artisan.metier ?? 'autre', priceHints);
 
     if (extraction.questions_manquantes.length > 0 && (ctx.clarification_round ?? 0) < MAX_CLARIFICATION_ROUNDS) {
       ctx.questions_restantes = extraction.questions_manquantes;
@@ -440,8 +464,8 @@ async function handleRecapResponse(
   if (n === 'NON' || n === 'NO' || n === 'CORRIGER' || n === 'NON CORRIGER') {
     const backState = ctx.mode === 'rapide' ? 'RAPIDE_COLLECTING' : 'ASSISTE_COLLECTING';
     const backCtx: SessionContext = ctx.mode === 'rapide'
-      ? { ...ctx, rapide_step: 'description', devis_partiel: undefined }
-      : { ...ctx, description_brute: undefined, clarification_round: 0, devis_partiel: undefined };
+      ? { ...ctx, rapide_step: 'description', devis_partiel: undefined, edit_round: 0 }
+      : { ...ctx, description_brute: undefined, clarification_round: 0, devis_partiel: undefined, edit_round: 0 };
     await updateSession(sessionId, backState, backCtx);
     await channel.sendText(from, ctx.mode === 'rapide'
       ? MSG.rapide_demande_description()
@@ -450,12 +474,53 @@ async function handleRecapResponse(
     return;
   }
 
-  // Texte libre → correction directe
+  // Texte libre → retouche conversationnelle du récap (édition fine).
+  // On modifie devis_partiel sans tout recommencer, sauf si l'instruction décrit
+  // en réalité un nouveau devis (is_new_devis) ou si l'édition échoue.
+  const partiel = ctx.devis_partiel as ExtractionResult | undefined;
+  const editRound = ctx.edit_round ?? 0;
+
+  if (partiel?.lignes?.length) {
+    if (editRound >= MAX_EDIT_ROUNDS) {
+      await channel.sendText(
+        from,
+        `On a déjà bien ajusté 🙂 Répondez *OUI* pour générer le devis, ou *RECOMMENCER* pour repartir de zéro.`
+      );
+      return;
+    }
+
+    await channel.sendText(from, MSG.rapide_analyse());
+    try {
+      const { extraction, is_new_devis } = await applyRecapEdit(partiel, text);
+
+      if (!is_new_devis) {
+        if (extraction.lignes.length === 0) {
+          await channel.sendText(
+            from,
+            `Cette modification viderait le devis. Répondez *OUI* pour garder le devis actuel, ou *RECOMMENCER* pour repartir.`
+          );
+          return;
+        }
+        ctx.devis_partiel = extraction as unknown as SessionContext['devis_partiel'];
+        ctx.edit_round = editRound + 1;
+        await updateSession(sessionId, 'RECAP_SENT', ctx);
+        await channel.sendText(from, buildRecapMessage(extraction, { devise: ctx.devise, tvaPct: ctx.tva, omissions: detectOmissions(extraction.lignes, artisan.metier) }));
+        return;
+      }
+      // is_new_devis → on retombe sur le redémarrage du tunnel ci-dessous.
+    } catch (err) {
+      console.error('[recap] édition error', safeError(err));
+      // Échec d'édition → redémarrage classique (filet de sécurité).
+    }
+  }
+
+  // Nouveau devis (ou pas de devis partiel / échec édition) → on redémarre le tunnel.
   if (ctx.mode === 'rapide') {
-    await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description' });
+    await updateSession(sessionId, 'RAPIDE_COLLECTING', { ...ctx, rapide_step: 'description', edit_round: 0 });
     await handleRapideCollecting(from, artisan, sessionId, { ...ctx, rapide_step: 'description' }, text, channel);
   } else {
     ctx.description_brute = text;
+    ctx.edit_round = 0;
     await handleAssisteCollecting(from, artisan, sessionId, ctx, text, channel);
   }
 }
@@ -537,6 +602,14 @@ async function createDevisAndSendLink(
     m.updateDevisStatut(devis.id, 'en_attente_paiement', {})
   );
 
+  // Apprentissage (Jalon 2) : mémoriser les tarifs validés pour les réutiliser
+  // lors des prochains devis. Best-effort — ne bloque jamais la création.
+  try {
+    await rememberPrestations(artisan.id, extraction.lignes, ctx.devise ?? 'CHF');
+  } catch (err) {
+    console.warn('[prestations] mémorisation échouée (non-bloquant):', safeError(err));
+  }
+
   let linkUrl: string;
   if (process.env.STRIPE_SECRET_KEY) {
     try {
@@ -567,8 +640,7 @@ async function createDevisAndSendLink(
 
 export async function handlePaymentSuccess(
   stripeSessionId: string,
-  _paymentIntentId: string,
-  _channel: Channel
+  paymentIntentId: string
 ): Promise<void> {
   const { getArtisanById, updateDevisStatut, savePaiement, getDevisByToken } = await import('../services/supabase.js');
   const { getCheckoutSession } = await import('../services/stripe.js');
@@ -583,16 +655,63 @@ export async function handlePaymentSuccess(
   const artisan = await getArtisanById(devis.artisan_id);
   if (!artisan) throw new Error(`Artisan non trouvé ${devis.artisan_id}`);
 
+  // Idempotence : déjà entièrement livré → on ne refait rien.
+  if (devis.statut === 'envoyé') {
+    console.log(`[payment] devis ${devis.numero} déjà envoyé — ignoré (idempotence)`);
+    return;
+  }
+
   // 1) Enregistre le paiement et marque le devis 'payé' IMMÉDIATEMENT.
   //    Ainsi la page web débloque le devis dès le retour, même si la
   //    génération PDF / l'envoi échoue ensuite (Puppeteer fragile sur Render).
-  await savePaiement(devis.id, _paymentIntentId, devis.montant_ttc);
+  //    savePaiement lève sur doublon (contrainte UNIQUE stripe_payment_id) :
+  //    c'est le garde-fou contre un rejeu du webhook (pas de double livraison).
+  await savePaiement(devis.id, paymentIntentId, devis.montant_ttc);
   await updateDevisStatut(devis.id, 'payé', { paid_at: new Date().toISOString() });
   await incrementDevisCount(artisan.id);
   console.log(`[payment] devis ${devis.numero} marqué payé`);
 
   // 2) Génération PDF + livraison : best-effort, ne doit JAMAIS rejeter
   //    (sinon le webhook Stripe renverra une erreur et rejouera l'event).
+  await deliverDevis(devis, artisan);
+}
+
+/**
+ * Livraison d'un devis OFFERT (Jalon 3) : pas de Stripe. On enregistre un
+ * « paiement » à 0 (la contrainte UNIQUE stripe_payment_id sert de garde-fou
+ * anti double-clic), on marque le devis payé, on incrémente le compteur, puis
+ * on génère/envoie le PDF. Appelé par la route /pay quand le devis est offert.
+ */
+export async function deliverFreeDevis(devisId: string): Promise<void> {
+  const { getDevisById, getArtisanById, updateDevisStatut, savePaiement } = await import('../services/supabase.js');
+
+  const devis = await getDevisById(devisId);
+  if (!devis) throw new Error(`Devis introuvable ${devisId}`);
+  if (devis.statut === 'envoyé') return; // idempotence : déjà livré
+
+  const artisan = await getArtisanById(devis.artisan_id);
+  if (!artisan) throw new Error(`Artisan introuvable ${devis.artisan_id}`);
+
+  try {
+    await savePaiement(devis.id, `free_${devis.id}`, 0);
+  } catch (err) {
+    // Doublon (UNIQUE) → livraison déjà initiée par un précédent clic.
+    console.warn(`[free] devis ${devis.numero} déjà traité (idempotence):`, safeError(err));
+    return;
+  }
+
+  await updateDevisStatut(devis.id, 'payé', { paid_at: new Date().toISOString() });
+  await incrementDevisCount(artisan.id);
+  await deliverDevis(devis, artisan);
+}
+
+/**
+ * Génère le PDF du devis, l'uploade et le livre (WhatsApp/Telegram + email).
+ * Best-effort : log mais ne rejette jamais (le devis est déjà payé).
+ * Réutilisable pour une reprise de livraison (cf. route /redeliver).
+ */
+export async function deliverDevis(devis: Devis, artisan: Artisan): Promise<void> {
+  const { updateDevisStatut } = await import('../services/supabase.js');
   try {
     const channel = await channelFromNumber(artisan.whatsapp_number);
     const pdfBuffer = await generateDevisPdf(devis, artisan);

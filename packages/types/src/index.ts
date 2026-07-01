@@ -52,6 +52,8 @@ export interface SessionContext {
 
   // Devis en cours d'extraction
   devis_partiel?: unknown;
+  // Nombre de retouches conversationnelles appliquées au récap (garde-fou coût)
+  edit_round?: number;
 
   // Client lié au devis
   client_id?: string;
@@ -84,6 +86,10 @@ export interface Artisan {
   devis_count: number;
   stripe_customer_id?: string;
   stripe_subscription_id?: string;
+  // Espace client SaaS (Phase A) — rattachement compte web ↔ fiche artisan
+  auth_user_id?: string;
+  link_code?: string;
+  link_code_expires?: string;
   created_at: string;
   updated_at: string;
 }
@@ -188,6 +194,21 @@ export interface Client {
   adresse?: string;
   type_chantier?: string;
   notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Prestation (bibliothèque de prix par artisan) ───────────────────────────
+
+export interface Prestation {
+  id: string;
+  artisan_id: string;
+  label: string;           // description normalisée (minuscule, espaces compactés)
+  unite: string;           // 'h', 'm²', 'forfait', etc.
+  prix_unitaire: number;
+  devise: 'CHF' | 'EUR';
+  usage_count: number;
+  last_used_at: string;
   created_at: string;
   updated_at: string;
 }
